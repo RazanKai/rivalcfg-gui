@@ -1,8 +1,6 @@
 # RivalCFG GUI
 <img width="1291" height="750" alt="image" src="https://github.com/user-attachments/assets/98d0daf0-7061-481e-a4a7-ab4bcfa5f7a6" />
 
-# 🇺🇸 English
-
 A Linux desktop configuration tool for SteelSeries mice (via the `rivalcfg` CLI).
 
 ## Features
@@ -83,88 +81,4 @@ yay -Rns rivalcfg-gui
 If no mouse is connected or `rivalcfg` is not found, the application will exit immediately with an error message.
 
 ## License
-GPL-3.0-or-later
-
-# 🇹🇷 Türkçe
-
-SteelSeries fareler için Linux masaüstü yapılandırma aracı (`rivalcfg` CLI üzerinden).
-
-## Özellikler
-
-- **DPI Ayarları** — 5 preset değer, slider ile 200–8500 arası (100'lük adımlar)
-- **Polling Rate** — 125 / 250 / 500 / 1000 Hz seçimi
-- **RGB Aydınlatma** — 4 bağımsız bölge (üst şerit, orta şerit, alt şerit, logo), 7 efekt (steady, breath, breath-slow, breath-fast, rainbow-shift, rainbow-breath, disco)
-- **Buton Eşlemeleri** — 8 butonun tamamını yeniden eşleme (sol, sağ, orta, geri, ileri, DPI, scroll yukarı/aşağı), etkileşimli fare diyagramı ile
-- **Otomatik Tıklayıcı** — yapılandırılabilir CPS (1–50), tetik tuşu (klavye/fare), toggle/hold modları ve kısayol tuşu ile yazılım tıklayıcı
-- **Profiller** — tüm ayarları içeren profilleri kaydetme, yükleme, yeniden adlandırma ve silme
-- **Otomatik Uygula** — değişiklikleri anında fareye uygulama seçeneği
-- **Cihaz Bilgisi** — bağlı cihazları listeleme, firmware sürümü sorgulama
-- **Fare Durumu** — durum çubuğunda anlık bağlantı kontrolü
-- **Dil Değiştirme** — çalışma anında arayüz dilini değiştirme
-- **Vurgu Rengi** — özelleştirilebilir arayüz vurgu rengi
-- **Fabrika Sıfırlama** — tüm fare ayarlarını varsayılana döndürme
-- **Küçültülmüş Başlatma** — sistem tepsisine küçültülmüş olarak başlatma seçeneği
-- **Günlük Kaydı** — `~/.config/rivalcfg-gui/logs/` dizininde 7 günlük döner günlükler
-
-## Dil Desteği
-
-| Dil | Kod |
-|-----|-----|
-| İngilizce (referans) | `en` |
-| Almanca | `de` |
-| İspanyolca | `es` |
-| Fransızca | `fr` |
-| İtalyanca | `it` |
-| Lehçe | `pl` |
-| Portekizce (Brezilya) | `pt_BR` |
-| Rusça | `ru` |
-| Türkçe | `tr` |
-| Çince (Basitleştirilmiş) | `zh_CN` |
-
-Yeni bir çeviri eklemek için `locales/en/LC_MESSAGES/rivalcfg_gui.po` dosyasını kopyalayın, dizeleri çevirin ve bir pull request gönderin.
-
-## Desteklenen Cihazlar
-
-`rivalcfg` tarafından desteklenen tüm cihazlarla çalışır — Rival 100/300/500/600/700
-serileri, Sensei, Kinzu, Aerox, Prime ve daha fazlası.
-
-> Tam liste: https://github.com/flozz/rivalcfg#supported-devices
->
-> Şu an Rival 3 ile tasarlanmış ve test edilmiştir.
-> Özellik kullanılabilirliği (RGB bölgeleri, buton sayısı, polling rate) cihaza göre değişir.
-
-## Kurulum
-
-### Arch Linux (AUR)
-
-```bash
-yay -S rivalcfg-gui
-```
-
-**Güncelleme:**
-```bash
-yay -Suy rivalcfg-gui
-```
-
-**Kaldırma:**
-```bash
-yay -Rns rivalcfg-gui
-```
-
-## Gereksinimler
-
-| Paket | Amaç |
-|-------|------|
-| Python 3 | Çalışma ortamı |
-| GTK3 | Arayüz iskeleti |
-| python-gobject (`gi`) | Python GTK3 bağlantısı |
-| python-cairo (`cairo`) | Python Cairo bağlantısı |
-| `rivalcfg` | SteelSeries CLI aracı |
-| python-evdev (`evdev`) | Linux girdi olay izleme |
-| python-pynput (`pynput`) | Fare kontrolü ve olay yakalama |
-| python-xlib (`Xlib`) | X11 tuş kodu çözümleme |
-
-Fare bağlı değilse veya `rivalcfg` bulunamazsa uygulama başlangıçta hata vererek kapanacaktır.
-
-## Lisans
 GPL-3.0-or-later
