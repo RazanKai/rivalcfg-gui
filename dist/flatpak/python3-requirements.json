@@ -30,15 +30,6 @@
             "sources": [
                 {
                     "type": "file",
-                    "url": "https://files.pythonhosted.org/packages/a5/f5/397b61091120a9ca5001041dd7bf76c385b3bfd67a0e5bcb74b852bd22a4/evdev-1.9.3.tar.gz",
-                    "sha256": "2c140e01ac8437758fa23fe5c871397412461f42d421aa20241dc8fe8cfccbc9",
-                    "x-checker-data": {
-                        "type": "pypi",
-                        "name": "evdev"
-                    }
-                },
-                {
-                    "type": "file",
                     "url": "https://files.pythonhosted.org/packages/6d/98/bbeb760852adb27f166ce1617f0e51aabb15f21b1e60ea703f2aed3c78ac/pynput-1.8.2-py2.py3-none-any.whl",
                     "sha256": "8cc38cf13a6ab2749cb375678be8a0fd705d7ce49c8001ff5db4007a723bbef1",
                     "x-checker-data": {
@@ -107,11 +98,12 @@
             "sources": [
                 {
                     "type": "file",
-                    "url": "https://files.pythonhosted.org/packages/74/f6/caad9ed701fbb9223eb9e0b41a5514390769b4cb3084a2704ab69e9df0fe/hidapi-0.15.0.tar.gz",
-                    "sha256": "ecbc265cbe8b7b88755f421e0ba25f084091ec550c2b90ff9e8ddd4fcd540311",
+                    "url": "https://files.pythonhosted.org/packages/f1/b0/f144cee5ce9e45518d234fd07c7a4f9a66de3a78ed42bf9f3f4083165e10/hidapi-0.15.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.whl",
+                    "sha256": "208c7fc89f78c3448d55957c3e12893778aa91218ed7dc22697e554f091fe4fe",
                     "x-checker-data": {
                         "type": "pypi",
-                        "name": "hidapi"
+                        "name": "hidapi",
+                        "packagetype": "bdist_wheel"
                     }
                 },
                 {
