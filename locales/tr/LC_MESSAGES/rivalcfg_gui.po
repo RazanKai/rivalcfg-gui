@@ -543,6 +543,10 @@ msgstr "(tuşlara basın)"
 msgid "Shortcut: Not set"
 msgstr "Kısayol: Ayarlanmamış"
 
+#: rivalcfg_gui.py:3448
+msgid "Bug Report"
+msgstr "Hata Bildir"
+
 #~ msgid "BUTTON ASSIGNMENTS"
 #~ msgstr "DÜĞME ATAMALARI"
 

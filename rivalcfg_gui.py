@@ -438,6 +438,20 @@ spinbutton.value-display button {
     color: #ff7800;
 }
 
+.status-bar-btn {
+    background: transparent;
+    border: none;
+    color: #888899;
+    padding: 2px 6px;
+    min-width: 24px;
+    min-height: 24px;
+}
+
+.status-bar-btn:hover {
+    background: #1a1a2e;
+    color: #ccccdd;
+}
+
 scale trough {
     background: #1a1a2e;
     min-height: 6px;
@@ -3443,6 +3457,21 @@ def create_window_content(window):
     status_label.set_halign(Gtk.Align.START)
     status_bar.pack_start(status_label, False, False, 0)
     app_state["status_label"] = status_label
+
+    bug_report_pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+        os.path.join(os.path.dirname(os.path.realpath(__file__)), "assets", "bug-report.svg"),
+        16, 16, True
+    )
+    bug_report_btn = Gtk.Button()
+    bug_report_btn.set_image(Gtk.Image.new_from_pixbuf(bug_report_pixbuf))
+    bug_report_btn.set_relief(Gtk.ReliefStyle.NONE)
+    bug_report_btn.set_tooltip_text(_("Bug Report"))
+    bug_report_btn.get_style_context().add_class("status-bar-btn")
+    bug_report_btn.connect("clicked", lambda _: Gtk.show_uri(
+        None, "https://github.com/MrGodzilla38/rivalcfg-gui/issues",
+        Gtk.get_current_event_time()
+    ))
+    status_bar.pack_end(bug_report_btn, False, False, 0)
 
     app_state["no_save"] = False
     no_save_check = Gtk.CheckButton(label=_("Don't save (--no-save)"))

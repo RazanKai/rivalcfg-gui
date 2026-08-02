@@ -543,6 +543,10 @@ msgstr "(naciśnij klawisze)"
 msgid "Shortcut: Not set"
 msgstr "Skrót: Nie ustawiono"
 
+#: rivalcfg_gui.py:3448
+msgid "Bug Report"
+msgstr "Zgłoś błąd"
+
 #~ msgid "BUTTON ASSIGNMENTS"
 #~ msgstr "BUTTON ASSIGNMENTS"
 
