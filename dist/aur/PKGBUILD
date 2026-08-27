@@ -23,9 +23,11 @@ package() {
     # Install application files (ALL project files including locale, images, Python files, etc.)
     install -d "${pkgdir}/usr/share/${pkgname}"
 
-    # Copy all project files, excluding only build/CI directories
-    rsync -a --exclude='dist/' --exclude='.git/' --exclude='.github/' --exclude='__pycache__/' --exclude='*.pyc' \
-      ./ "${pkgdir}/usr/share/${pkgname}/"
+    # Copy project files, excluding build/CI directories
+    find . -mindepth 1 -maxdepth 1 \
+      ! -name 'dist' ! -name '.git' ! -name '.github' ! -name '__pycache__' \
+      -exec cp -r {} "${pkgdir}/usr/share/${pkgname}/" \;
+    find "${pkgdir}/usr/share/${pkgname}" -name '*.pyc' -delete
 
     chmod 755 "${pkgdir}/usr/share/${pkgname}/rivalcfg_gui.py"
 

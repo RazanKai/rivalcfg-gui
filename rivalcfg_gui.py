@@ -10,6 +10,7 @@ import math
 import gettext
 import locale
 import logging
+import fcntl
 from logging.handlers import TimedRotatingFileHandler
 
 def _get_locale_dir():
@@ -30,12 +31,13 @@ def setup_gettext(lang=None):
         translation = gettext.NullTranslations()
     return translation.gettext
 
+_ = setup_gettext()
+
+
 def _set_language(lang=None):
     """Update the global _ function to use the specified language."""
     global _
     _ = setup_gettext(lang)
-
-_ = setup_gettext()
 
 try:
     import gi
@@ -106,6 +108,9 @@ DEFAULT_SETTINGS = {
     "macro_toggle_key": "",
     "macro_mode": "toggle",
     "macro_button": "left",
+    "hyprland_mouse_sync": False,
+    "hyprland_follow_mouse": 1,
+    "hyprland_macro_bind": False,
 }
 
 
@@ -600,8 +605,63 @@ def rgba_to_hex(rgba):
     return f"{r:02x}{g:02x}{b:02x}"
 
 
+_IS_WAYLAND = bool(os.environ.get("WAYLAND_DISPLAY"))
+IS_HYPRLAND = bool(os.environ.get("HYPRLAND_INSTANCE_SIGNATURE"))
+HYPRLAND_AVAILABLE = False
+if IS_HYPRLAND:
+    try:
+        subprocess.run(["hyprctl", "version"], capture_output=True, timeout=5)
+        HYPRLAND_AVAILABLE = True
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        HYPRLAND_AVAILABLE = False
+
+
+_WL_KEYCODE_TABLE = {
+    9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 6, 15: 7, 16: 8,
+    17: 9, 18: 10, 19: 11, 20: 12, 21: 13, 22: 14, 23: 15,
+    24: 16, 25: 17, 26: 18, 27: 19, 28: 20, 29: 21, 30: 22,
+    31: 23, 32: 24, 33: 25, 34: 26, 35: 27, 36: 28, 37: 29,
+    38: 30, 39: 31, 40: 32, 41: 33, 42: 34, 43: 35, 44: 36,
+    45: 37, 46: 38, 47: 39, 48: 40, 49: 41, 50: 42, 51: 43,
+    52: 44, 53: 45, 54: 46, 55: 47, 56: 48, 57: 49, 58: 50,
+    59: 51, 60: 52, 61: 53, 62: 54, 63: 55, 64: 56, 65: 57,
+    66: 58, 67: 59, 68: 60, 69: 61, 70: 62, 71: 63, 72: 64,
+    73: 65, 74: 66, 75: 67, 76: 68, 77: 69, 78: 70, 79: 71,
+    80: 72, 81: 73, 82: 74, 83: 75, 84: 76, 85: 77, 86: 78,
+    87: 79, 88: 80, 89: 81, 90: 82, 91: 83, 92: 84, 93: 85,
+    94: 86, 95: 87, 96: 88, 97: 89, 104: 90, 105: 91, 106: 92,
+    107: 93, 108: 94, 109: 95, 110: 96, 111: 97, 112: 98, 113: 99,
+    114: 100, 115: 101, 116: 102, 117: 103, 118: 104, 119: 105,
+    120: 106, 121: 107, 122: 108, 123: 109, 124: 110, 125: 111,
+    126: 112, 127: 113, 128: 114, 129: 115, 130: 116, 131: 117,
+    132: 118, 133: 125, 134: 126, 135: 127, 136: 167, 137: 148,
+    138: 164, 139: 166, 140: 142, 141: 140, 142: 143, 143: 144,
+    144: 145, 145: 146, 146: 163, 147: 107, 148: 109, 149: 110,
+    150: 111, 151: 112, 152: 113, 153: 114, 154: 115, 155: 116,
+    156: 117, 157: 118, 158: 119, 159: 120, 160: 121, 161: 122,
+    162: 123, 163: 124, 164: 191, 165: 192, 166: 193, 167: 194,
+    168: 195, 169: 196, 170: 197, 171: 108, 172: 128, 173: 97,
+    174: 129, 175: 130, 176: 131, 177: 132, 178: 133, 179: 134,
+    180: 135, 181: 136, 182: 137, 183: 138, 184: 139, 185: 140,
+    186: 141, 187: 142, 188: 143, 189: 144, 190: 145, 191: 146,
+    192: 147, 193: 168, 194: 169, 195: 170, 196: 171, 197: 172,
+    198: 173, 199: 174, 200: 175, 201: 176, 202: 177, 203: 178,
+    204: 179, 205: 180, 206: 181, 207: 182, 208: 183, 209: 184,
+    210: 185, 211: 186, 212: 187, 213: 188, 214: 189, 215: 190,
+    216: 198, 217: 199, 218: 200, 219: 201, 220: 202, 221: 203,
+    222: 204, 223: 205, 224: 224, 225: 225, 226: 226, 227: 227,
+    228: 228, 229: 229, 230: 230, 231: 231, 232: 232, 233: 233,
+    234: 234, 235: 235, 236: 236, 237: 237, 238: 238, 239: 239,
+    240: 240, 241: 241, 242: 242, 243: 243, 244: 244, 245: 245,
+    246: 246, 247: 247, 248: 248, 249: 249, 250: 250, 251: 251,
+    252: 252, 253: 253, 254: 254, 255: 255,
+}
+
+
 def _x11_to_linux_keycode(x11_kc):
     """Convert X11 keycode to Linux input keycode using display min_keycode offset."""
+    if _IS_WAYLAND:
+        return _WL_KEYCODE_TABLE.get(x11_kc, x11_kc)
     if not X11_AVAILABLE:
         return x11_kc
     try:
@@ -615,6 +675,109 @@ def _x11_to_linux_keycode(x11_kc):
     except Exception:
         pass
     return x11_kc
+
+
+def _hyprctl_get_mouse_settings():
+    """Get current Hyprland mouse settings via hyprctl."""
+    if not HYPRLAND_AVAILABLE:
+        return {}
+    try:
+        result = subprocess.run(
+            ["hyprctl", "getoption", "input:follow_mouse"],
+            capture_output=True, text=True, timeout=5
+        )
+        settings = {"follow_mouse": 1}
+        for line in result.stdout.splitlines():
+            if "follow_mouse" in line:
+                try:
+                    settings["follow_mouse"] = int(line.split(":")[1].strip())
+                except (ValueError, IndexError):
+                    pass
+        result = subprocess.run(
+            ["hyprctl", "getoption", "input:sensitivity"],
+            capture_output=True, text=True, timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if "sensitivity" in line:
+                try:
+                    settings["sensitivity"] = float(line.split(":")[1].strip())
+                except (ValueError, IndexError):
+                    pass
+        return settings
+    except Exception as e:
+        logging.error("Failed to get Hyprland mouse settings: %s", e)
+        return {}
+
+
+def _hyprctl_set_mouse_sensitivity(sensitivity):
+    """Set Hyprland mouse sensitivity."""
+    if not HYPRLAND_AVAILABLE:
+        return False
+    try:
+        result = subprocess.run(
+            ["hyprctl", "keyword", "input:sensitivity", str(sensitivity)],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logging.error("Failed to set Hyprland sensitivity: %s", e)
+        return False
+
+
+def _hyprctl_set_follow_mouse(follow):
+    """Set Hyprland follow_mouse setting."""
+    if not HYPRLAND_AVAILABLE:
+        return False
+    try:
+        result = subprocess.run(
+            ["hyprctl", "keyword", "input:follow_mouse", str(follow)],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logging.error("Failed to set Hyprland follow_mouse: %s", e)
+        return False
+
+
+def _hyprctl_bind_keybind(key, command, description=""):
+    """Add a Hyprland keybind. Returns True on success."""
+    if not HYPRLAND_AVAILABLE:
+        return False
+    try:
+        bind_str = f"{key}, {command}"
+        if description:
+            bind_str += f", {description}"
+        result = subprocess.run(
+            ["hyprctl", "keyword", "bind", bind_str],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logging.error("Failed to bind Hyprland keybind: %s", e)
+        return False
+
+
+def _hyprctl_unbind_keybind(key):
+    """Remove a Hyprland keybind."""
+    if not HYPRLAND_AVAILABLE:
+        return False
+    try:
+        result = subprocess.run(
+            ["hyprctl", "keyword", "unbind", key],
+            capture_output=True, text=True, timeout=5
+        )
+        return result.returncode == 0
+    except Exception as e:
+        logging.error("Failed to unbind Hyprland keybind: %s", e)
+        return False
+
+
+def _hyprctl_sync_mouse_to_rivalcfg(dpi_value):
+    """Sync Hyprland mouse DPI/sensitivity with rivalcfg settings."""
+    if not HYPRLAND_AVAILABLE:
+        return False
+    sensitivity = max(-1.0, min(1.0, (dpi_value - 800) / 3700.0))
+    return _hyprctl_set_mouse_sensitivity(sensitivity)
 
 
 def _find_keyboard_device():
@@ -711,6 +874,8 @@ class MacroEngine:
         return helper
 
     def _resolve_keycode(self, trigger_key):
+        if _IS_WAYLAND:
+            return self._resolve_keycode_wayland(trigger_key)
         from Xlib import display as xd, XK
         name_map = {
             "enter": "Return", "tab": "Tab",
@@ -738,6 +903,70 @@ class MacroEngine:
             return disp.keysym_to_keycode(ks)
         finally:
             disp.close()
+
+    def _resolve_keycode_wayland(self, trigger_key):
+        """Resolve key name to Linux keycode on Wayland using evdev device lookup."""
+        from glob import glob
+        import struct
+        _IOC_NRBITS = 8
+        _IOC_TYPEBITS = 8
+        _IOC_SIZEBITS = 14
+        _IOC_DIRBITS = 2
+        _IOC_NRSHIFT = 0
+        _IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
+        _IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
+        _IOC_DIRSHIFT = _IOC_SIZESHIFT + _IOC_SIZEBITS
+        EVIOCGKEYCODE = (ord('E') << _IOC_DIRSHIFT) | (2 << _IOC_SIZESHIFT) | (0x18 << _IOC_TYPESHIFT) | (4 << _IOC_NRSHIFT)
+        keyname_to_evdev = {
+            "esc": 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6,
+            "6": 7, "7": 8, "8": 9, "9": 10, "0": 11, "minus": 12,
+            "equal": 13, "backspace": 14, "tab": 15, "q": 16, "w": 17,
+            "e": 18, "r": 19, "t": 20, "y": 21, "u": 22, "i": 23,
+            "o": 24, "p": 25, "bracketleft": 26, "bracketright": 27,
+            "return": 28, "enter": 28, "ctrl_l": 29, "ctrl": 29,
+            "a": 30, "s": 31, "d": 32, "f": 33, "g": 34, "h": 35,
+            "j": 36, "k": 37, "l": 38, "semicolon": 39, "apostrophe": 40,
+            "grave": 41, "shift_l": 42, "shift": 42, "backslash": 43,
+            "z": 44, "x": 45, "c": 46, "v": 47, "b": 48, "n": 49,
+            "m": 50, "comma": 51, "period": 52, "slash": 53,
+            "shift_r": 54, "kp_multiply": 55, "alt_l": 56, "alt": 56,
+            "space": 57, "caps_lock": 58, "f1": 59, "f2": 60, "f3": 61,
+            "f4": 62, "f5": 63, "f6": 64, "f7": 65, "f8": 66, "f9": 67,
+            "f10": 68, "num_lock": 69, "scroll_lock": 70,
+            "kp_7": 71, "kp_8": 72, "kp_9": 73, "kp_subtract": 74,
+            "kp_4": 75, "kp_5": 76, "kp_6": 77, "kp_add": 78,
+            "kp_1": 79, "kp_2": 80, "kp_3": 81, "kp_0": 82,
+            "kp_decimal": 83, "f11": 87, "f12": 88, "kp_enter": 96,
+            "ctrl_r": 97, "kp_divide": 98, "print": 99, "alt_r": 100,
+            "home": 102, "up": 103, "page_up": 104, "left": 105,
+            "right": 106, "end": 107, "down": 108, "page_down": 109,
+            "insert": 110, "delete": 111, "pause": 119,
+            "super_l": 125, "super_r": 126, "menu": 139,
+        }
+        name = trigger_key.lower()
+        if name in keyname_to_evdev:
+            return keyname_to_evdev[name]
+        try:
+            paths = sorted(glob("/dev/input/by-path/*-event-kbd"))
+            if paths:
+                dev_path = paths[0]
+            else:
+                dev_path = _find_keyboard_device()
+            if not dev_path:
+                return None
+            with open(dev_path, "rb") as fd:
+                buf = bytearray(8)
+                for kc in range(256):
+                    try:
+                        fcntl.ioctl(fd, EVIOCGKEYCODE, buf)
+                        scancode = struct.unpack("=I", bytes(buf[:4]))[0]
+                        if scancode == kc:
+                            return kc
+                    except (OSError, struct.error):
+                        continue
+        except Exception:
+            pass
+        return keyname_to_evdev.get(name)
 
     def _ensure_device(self):
         if self._device is not None:
@@ -960,56 +1189,70 @@ class MacroEngine:
                 if x11_kc is None:
                     logging.error(f"Could not resolve keycode for '{trigger_key}'")
                     return
-                from Xlib import display as xd
-                d = xd.Display()
-                try:
-                    min_kc = d.display.info.min_keycode
-                finally:
-                    d.close()
-                linux_kc = x11_kc - min_kc
+                if _IS_WAYLAND:
+                    linux_kc = x11_kc
+                else:
+                    from Xlib import display as xd
+                    d = xd.Display()
+                    try:
+                        min_kc = d.display.info.min_keycode
+                    finally:
+                        d.close()
+                    linux_kc = x11_kc - min_kc
 
-            def monitor_direct(dev):
-                try:
-                    import select
-                    poll = select.poll()
-                    poll.register(dev, select.POLLIN)
-                    while not self._stop_event.is_set():
-                        if not poll.poll(100):
-                            continue
-                        for event in dev.read():
-                            if event.type == evdev.ecodes.EV_KEY:
-                                e = evdev.categorize(event)
-                                if e.scancode == linux_kc:
-                                    if e.keystate == e.key_down:
-                                        if mode == "toggle":
-                                            self.active = not self.active
-                                        elif mode == "hold":
-                                            self.active = True
-                                        GLib.idle_add(self._update_status)
-                                    elif e.keystate == e.key_up:
-                                        if mode == "hold":
-                                            self.active = False
+            use_helper = bool(_IS_WAYLAND)
+            if not use_helper:
+                def monitor_direct(dev):
+                    try:
+                        import select
+                        poll = select.poll()
+                        poll.register(dev, select.POLLIN)
+                        while not self._stop_event.is_set():
+                            if not poll.poll(100):
+                                continue
+                            for event in dev.read():
+                                if event.type == evdev.ecodes.EV_KEY:
+                                    e = evdev.categorize(event)
+                                    if e.scancode == linux_kc:
+                                        if e.keystate == e.key_down:
+                                            if mode == "toggle":
+                                                self.active = not self.active
+                                            elif mode == "hold":
+                                                self.active = True
                                             GLib.idle_add(self._update_status)
-                except Exception as e:
-                    logging.error(f"evdev direct error: {e}")
-                finally:
-                    self._close_device()
+                                        elif e.keystate == e.key_up:
+                                            if mode == "hold":
+                                                self.active = False
+                                                GLib.idle_add(self._update_status)
+                    except Exception as e:
+                        logging.error(f"evdev direct error: {e}")
+                    finally:
+                        self._close_device()
 
-            dev = self._ensure_device()
-            if dev is not None:
-                self.monitor_thread = threading.Thread(
-                    target=monitor_direct, args=(dev,), daemon=True
-                )
-                self.monitor_thread.start()
-            elif self._device_path is not None:
+                dev = self._ensure_device()
+                if dev is not None:
+                    self.monitor_thread = threading.Thread(
+                        target=monitor_direct, args=(dev,), daemon=True
+                    )
+                    self.monitor_thread.start()
+                elif self._device_path is not None:
+                    use_helper = True
+                else:
+                    logging.error("No keyboard device found")
+                    GLib.idle_add(self._set_status_text, _("No keyboard device"))
+                    return
+
+            if use_helper:
+                kb_path = _find_keyboard_device()
+                if kb_path is None:
+                    logging.error("No keyboard device for helper")
+                    GLib.idle_add(self._set_status_text, _("No keyboard device"))
+                    return
                 self.monitor_thread = threading.Thread(
                     target=self._start_helper_monitor,
-                    args=(self._device_path, linux_kc, mode), daemon=True
+                    args=(kb_path, linux_kc, mode), daemon=True
                 )
                 self.monitor_thread.start()
-            else:
-                logging.error("No keyboard device found")
-                GLib.idle_add(self._set_status_text, _("No keyboard device"))
 
         def click_loop():
             while not self._stop_event.is_set():
@@ -1307,6 +1550,8 @@ def create_dpi_page():
         vals = app_state["dpi_values"]
         arg = ",".join(str(v) for v in vals)
         run_rivalcfg(["--sensitivity", arg])
+        if app_state["settings"].get("hyprland_mouse_sync") and HYPRLAND_AVAILABLE:
+            _hyprctl_sync_mouse_to_rivalcfg(vals[0])
 
     apply_btn.connect("clicked", on_apply_dpi)
     btn_row.pack_start(apply_btn, False, False, 0)
@@ -2597,6 +2842,10 @@ def apply_all_to_device():
 
     if args:
         run_rivalcfg(args)
+        if app_state["settings"].get("hyprland_mouse_sync") and HYPRLAND_AVAILABLE:
+            dpi_vals = app_state.get("dpi_values")
+            if dpi_vals:
+                _hyprctl_sync_mouse_to_rivalcfg(dpi_vals[0])
 
 
 def create_settings_page():
@@ -2823,6 +3072,130 @@ def create_settings_page():
 
     reset_accent_btn.connect("clicked", on_reset_accent)
     appearance_card.pack_start(reset_accent_btn, False, False, 0)
+
+    # --- HYPRLAND CARD (only visible on Hyprland) ---
+    if HYPRLAND_AVAILABLE:
+        hyprland_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        hyprland_card.get_style_context().add_class("card")
+        page.pack_start(hyprland_card, False, False, 0)
+
+        hyprland_title = Gtk.Label(label=_("HYPRLAND"))
+        hyprland_title.get_style_context().add_class("card-title")
+        hyprland_title.set_halign(Gtk.Align.START)
+        hyprland_card.pack_start(hyprland_title, False, False, 0)
+
+        # Mouse Sync
+        sync_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        sync_row.get_style_context().add_class("setting-row")
+
+        sync_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        sync_text.set_hexpand(True)
+        sync_label = Gtk.Label(label=_("Sync Mouse DPI"))
+        sync_label.get_style_context().add_class("setting-label")
+        sync_label.set_halign(Gtk.Align.START)
+        sync_desc = Gtk.Label(label=_("Sync rivalcfg DPI with Hyprland mouse settings"))
+        sync_desc.get_style_context().add_class("setting-desc")
+        sync_desc.set_halign(Gtk.Align.START)
+        sync_text.pack_start(sync_label, False, False, 0)
+        sync_text.pack_start(sync_desc, False, False, 0)
+        sync_row.pack_start(sync_text, True, True, 0)
+
+        sync_switch = Gtk.Switch()
+        sync_switch.set_active(app_state["settings"].get("hyprland_mouse_sync", False))
+        sync_row.pack_start(sync_switch, False, False, 0)
+        hyprland_card.pack_start(sync_row, False, False, 0)
+
+        def on_hyprland_sync_toggled(s, *a):
+            val = sync_switch.get_active()
+            app_state["settings"]["hyprland_mouse_sync"] = val
+            logging.info("Settings: hyprland_mouse_sync = %s", val)
+            save_settings()
+            if val:
+                dpi = app_state.get("dpi_values", [800])[0]
+                _hyprctl_sync_mouse_to_rivalcfg(dpi)
+        sync_switch.connect("notify::active", on_hyprland_sync_toggled)
+
+        # Follow Mouse
+        follow_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        follow_row.get_style_context().add_class("setting-row")
+
+        follow_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        follow_text.set_hexpand(True)
+        follow_label = Gtk.Label(label=_("Follow Mouse"))
+        follow_label.get_style_context().add_class("setting-label")
+        follow_label.set_halign(Gtk.Align.START)
+        follow_desc = Gtk.Label(label=_("Enable Hyprland follow_mouse (cursor warping)"))
+        follow_desc.get_style_context().add_class("setting-desc")
+        follow_desc.set_halign(Gtk.Align.START)
+        follow_text.pack_start(follow_label, False, False, 0)
+        follow_text.pack_start(follow_desc, False, False, 0)
+        follow_row.pack_start(follow_text, True, True, 0)
+
+        follow_combo = Gtk.ComboBoxText()
+        follow_options = [("0", _("Disabled")), ("1", _("Enabled")), ("2", _("On Release"))]
+        for val, label in follow_options:
+            follow_combo.append_text(label)
+        current_follow = str(app_state["settings"].get("hyprland_follow_mouse", 1))
+        for i, (v, _label) in enumerate(follow_options):
+            if v == current_follow:
+                follow_combo.set_active(i)
+                break
+        follow_row.pack_start(follow_combo, False, False, 0)
+        hyprland_card.pack_start(follow_row, False, False, 0)
+
+        def on_follow_mouse_changed(combo):
+            idx = combo.get_active()
+            if 0 <= idx < len(follow_options):
+                val = int(follow_options[idx][0])
+                app_state["settings"]["hyprland_follow_mouse"] = val
+                logging.info("Settings: hyprland_follow_mouse = %s", val)
+                save_settings()
+                _hyprctl_set_follow_mouse(val)
+        follow_combo.connect("changed", on_follow_mouse_changed)
+
+        # Keybind for macro toggle
+        bind_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        bind_row.get_style_context().add_class("setting-row")
+
+        bind_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        bind_text.set_hexpand(True)
+        bind_label = Gtk.Label(label=_("Macro Toggle Keybind"))
+        bind_label.get_style_context().add_class("setting-label")
+        bind_label.set_halign(Gtk.Align.START)
+        bind_desc = Gtk.Label(label=_("Register macro toggle as Hyprland keybind"))
+        bind_desc.get_style_context().add_class("setting-desc")
+        bind_desc.set_halign(Gtk.Align.START)
+        bind_text.pack_start(bind_label, False, False, 0)
+        bind_text.pack_start(bind_desc, False, False, 0)
+        bind_row.pack_start(bind_text, True, True, 0)
+
+        bind_switch = Gtk.Switch()
+        bind_switch.set_active(app_state["settings"].get("hyprland_macro_bind", False))
+        bind_row.pack_start(bind_switch, False, False, 0)
+        hyprland_card.pack_start(bind_row, False, False, 0)
+
+        def on_hyprland_macro_bind_toggled(s, *a):
+            val = bind_switch.get_active()
+            app_state["settings"]["hyprland_macro_bind"] = val
+            logging.info("Settings: hyprland_macro_bind = %s", val)
+            save_settings()
+            toggle_key = app_state["settings"].get("macro_toggle_key", "")
+            if val and toggle_key:
+                _hyprctl_bind_keybind(toggle_key, "pkill -SIGUSR1 rivalcfg-gui", "rivalcfg-gui macro toggle")
+            elif not val and toggle_key:
+                _hyprctl_unbind_keybind(toggle_key)
+        bind_switch.connect("notify::active", on_hyprland_macro_bind_toggled)
+
+        # Hyprland status
+        status_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        status_row.set_margin_top(8)
+        hypr_status_dot = Gtk.Label(label="●")
+        hypr_status_dot.get_style_context().add_class("status-ok")
+        hypr_status_label = Gtk.Label(label=_("Hyprland detected"))
+        hypr_status_label.get_style_context().add_class("setting-desc")
+        status_row.pack_start(hypr_status_dot, False, False, 0)
+        status_row.pack_start(hypr_status_label, False, False, 0)
+        hyprland_card.pack_start(status_row, False, False, 0)
 
     # --- DIAGNOSTICS CARD ---
     diagnostics_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
