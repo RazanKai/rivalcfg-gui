@@ -5,10 +5,10 @@ A Linux desktop configuration tool for SteelSeries mice (via the `rivalcfg` CLI)
 
 ## Features
 
-- **DPI Settings** — 5 adjustable presets via sliders (200–8500, in 100-step increments)
+- **DPI Settings** — up to 5 adjustable presets via sliders (range auto-detected from `rivalcfg --help`, e.g. 200–8500 Rival 3, 100–18000 Aerox 5 Wireless, in 100-step increments)
 - **Polling Rate** — 125 / 250 / 500 / 1000 Hz selection
-- **RGB Lighting** — 4 independent zones (top strip, middle strip, bottom strip, logo) with 7 effects (steady, breath, breath-slow, breath-fast, rainbow-shift, rainbow-breath, disco)
-- **Button Mapping** — remap all 8 buttons (left, right, middle, back, forward, DPI, scroll up/down) with an interactive mouse diagram
+- **RGB Lighting** — device-aware zones and effects: Rival 3 (top/middle/bottom/logo + steady/breath/rainbow-shift/rainbow-breath/disco), Aerox family (top/middle/bottom, rainbow flag, reactive color, default lighting)
+- **Button Mapping** — remap buttons with an interactive mouse diagram (Aerox 5 Wireless: 9 buttons + scroll up/down preserved)
 - **Auto-Clicker** — software auto-clicker with configurable CPS (1–50), trigger key (keyboard or mouse), toggle/hold modes, and toggle key shortcut
 - **Profiles** — save, load, rename, and delete named profiles containing all settings
 - **Auto-Apply** — optionally apply settings immediately on change
@@ -44,8 +44,8 @@ Sensei, Kinzu, Aerox, Prime, and more.
 
 > Full list: https://github.com/flozz/rivalcfg#supported-devices
 >
-> Currently designed and tested against the Rival 3.
-> Feature availability (RGB zones, button count, polling rates) depends on device.
+> Tested against Rival 3 and SteelSeries Aerox 5 Wireless (1038:1852 2.4GHz / 1038:1854 wired).
+> DPI range, RGB zones/effects and button count are auto-detected from `rivalcfg --help`.
 
 ## Installation
 

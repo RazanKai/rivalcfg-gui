@@ -91,6 +91,138 @@ except FileNotFoundError:
 # Global dictionary holding application state
 app_state = {}
 
+# --- Device capabilities (Rival 3 vs Aerox family) ---
+# rivalcfg CLI flags differ per device family:
+#  Rival 3: --strip-top-color/--strip-middle-color/--strip-bottom-color,
+#           --logo-color, --light-effect (steady/breath/.../disco),
+#           DPI 200-8500
+#  Aerox 5 / Aerox 5 Wireless / Aerox 3 family: --top-color/--middle-color/
+#           --bottom-color, -a/--reactive-color, -e/--rainbow-effect (flag),
+#           -d/--default-lighting, no logo LED.
+#           Aerox 5 Wireless DPI 100-18000, Aerox 3 DPI 200-8500.
+import re as _re
+
+_DEVICE_CAPS_CACHE = {}
+
+
+def _rivalcfg_help_text():
+    try:
+        result = subprocess.run(
+            [RIVALCFG_BIN, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        return (result.stdout or "") + "\n" + (result.stderr or "")
+    except Exception:
+        return ""
+
+
+def get_device_caps(force=False):
+    """Detect connected mouse capabilities from `rivalcfg --help`.
+
+    Returns dict with: dpi_min, dpi_max, lighting_mode ('aerox'|'rival3'),
+    has_logo, color_flags, has_reactive, has_default_lighting,
+    has_rainbow_flag, has_light_effect, has_extra_buttons, device_label.
+    Falls back to Rival 3 defaults when detection fails.
+    """
+    if not force and "caps" in _DEVICE_CAPS_CACHE:
+        return _DEVICE_CAPS_CACHE["caps"]
+    help_text = _rivalcfg_help_text()
+    caps = {
+        "dpi_min": 200,
+        "dpi_max": 8500,
+        "lighting_mode": "rival3",
+        "has_logo": True,
+        "color_flags": {
+            "z1_hex": "--strip-top-color",
+            "z2_hex": "--strip-middle-color",
+            "z3_hex": "--strip-bottom-color",
+            "z4_hex": "--logo-color",
+        },
+        "has_reactive": False,
+        "has_default_lighting": False,
+        "has_rainbow_flag": False,
+        "has_light_effect": True,
+        "has_extra_buttons": False,
+        "device_label": "",
+    }
+    if not help_text:
+        _DEVICE_CAPS_CACHE["caps"] = caps
+        return caps
+    # DPI range: "from 100 dpi to 18000 dpi"
+    m = _re.search(r"from\s+(\d+)\s*dpi\s+to\s+(\d+)\s*dpi", help_text)
+    if m:
+        try:
+            caps["dpi_min"] = int(m.group(1))
+            caps["dpi_max"] = int(m.group(2))
+        except ValueError:
+            pass
+    # Lighting family
+    if "--top-color" in help_text and "--strip-top-color" not in help_text:
+        caps["lighting_mode"] = "aerox"
+        caps["has_logo"] = "--logo-color" in help_text
+        caps["color_flags"] = {
+            "z1_hex": "--top-color",
+            "z2_hex": "--middle-color",
+            "z3_hex": "--bottom-color",
+        }
+        caps["has_reactive"] = "--reactive-color" in help_text
+        caps["has_default_lighting"] = "--default-lighting" in help_text
+        caps["has_rainbow_flag"] = "--rainbow-effect" in help_text
+        caps["has_light_effect"] = "--light-effect" in help_text
+    else:
+        caps["lighting_mode"] = "rival3"
+        caps["has_light_effect"] = "--light-effect" in help_text
+    # Extra buttons (Aerox 5 Wireless has button7/8/9): parse default mapping
+    if "button7=" in help_text or "button9=" in help_text:
+        caps["has_extra_buttons"] = True
+    # Device label, e.g. "SteelSeries Aerox 5 Wireless (...) Options:"
+    m2 = _re.search(r"(SteelSeries[^\n]*?)\s+Options:", help_text)
+    if m2:
+        caps["device_label"] = m2.group(1).strip()
+    _DEVICE_CAPS_CACHE["caps"] = caps
+    return caps
+
+
+def is_steelseries_connected(debug_text):
+    """True when debug output shows any SteelSeries USB device (1038:xxxx)."""
+    if not debug_text:
+        return False
+    return bool(_re.search(r"1038:[0-9a-fA-F]{4}", debug_text))
+
+
+def build_buttons_arg(mapping):
+    """Build rivalcfg --buttons arg, including button7-9 on Aerox 5 class."""
+    caps = get_device_caps()
+    m = mapping or {}
+    if caps.get("has_extra_buttons"):
+        return (
+            f"buttons(button1={m.get('button1', 'button1')}; "
+            f"button2={m.get('button2', 'button2')}; "
+            f"button3={m.get('button3', 'button3')}; "
+            f"button4={m.get('button4', 'button4')}; "
+            f"button5={m.get('button5', 'button5')}; "
+            f"button6={m.get('button6', 'dpi')}; "
+            f"button7={m.get('button7', 'disabled')}; "
+            f"button8={m.get('button8', 'disabled')}; "
+            f"button9={m.get('button9', 'disabled')}; "
+            f"scrollup={m.get('scrollup', 'scrollup')}; "
+            f"scrolldown={m.get('scrolldown', 'scrolldown')}; "
+            f"layout=qwerty)"
+        )
+    return (
+        f"buttons(button1={m.get('button1', 'button1')}; "
+        f"button2={m.get('button2', 'button2')}; "
+        f"button3={m.get('button3', 'button3')}; "
+        f"button4={m.get('button4', 'button4')}; "
+        f"button5={m.get('button5', 'button5')}; "
+        f"button6={m.get('button6', 'dpi')}; "
+        f"scrollup={m.get('scrollup', 'scrollup')}; "
+        f"scrolldown={m.get('scrolldown', 'scrolldown')}; "
+        f"layout=qwerty)"
+    )
+
 SETTINGS_DIR = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
 SETTINGS_DIR = os.path.join(SETTINGS_DIR, "rivalcfg-gui")
 SETTINGS_FILE = os.path.join(SETTINGS_DIR, "settings.json")
@@ -193,6 +325,9 @@ def save_profile(name):
         "z3_hex": app_state.get("z3_hex", "ff6600"),
         "z4_hex": app_state.get("z4_hex", "ff6600"),
         "selected_effect": app_state.get("selected_effect", "steady"),
+        "reactive_hex": app_state.get("reactive_hex", "off"),
+        "rainbow_enabled": app_state.get("rainbow_enabled", False),
+        "default_lighting": app_state.get("default_lighting", "rainbow"),
         "button_mapping": app_state.get("button_mapping", {}),
         "macro_cps": s.get("macro_cps", 10),
         "macro_trigger_key": s.get("macro_trigger_key", "f6"),
@@ -1478,11 +1613,12 @@ def create_dpi_page():
             row.pack_start(lbl, False, False, 0)
 
             spin_btn = Gtk.SpinButton()
-            spin_btn.set_range(200, 8500)
+            caps = get_device_caps()
+            spin_btn.set_range(caps["dpi_min"], caps["dpi_max"])
             spin_btn.set_increments(100, 100)
             spin_btn.set_digits(0)
             spin_btn.set_numeric(True)
-            spin_btn.set_max_length(4)
+            spin_btn.set_max_length(5)
             spin_btn.set_value(val)
             spin_btn.set_size_request(80, -1)
             spin_btn.set_halign(Gtk.Align.START)
@@ -1491,7 +1627,7 @@ def create_dpi_page():
             app_state["dpi_labels"].append(spin_btn)
 
             scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL)
-            scale.set_range(200, 8500)
+            scale.set_range(caps["dpi_min"], caps["dpi_max"])
             scale.set_increments(100, 100)
             scale.set_draw_value(False)
             scale.set_digits(0)
@@ -1640,7 +1776,10 @@ def create_polling_page():
 
 
 def create_rgb_page():
-    """Create RGB Lighting page."""
+    """Create RGB Lighting page (device-aware: Rival 3 vs Aerox family)."""
+    caps = get_device_caps()
+    is_aerox = caps.get("lighting_mode") == "aerox"
+    color_flags = caps.get("color_flags", {})
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     page.set_margin_top(24)
     page.set_margin_bottom(24)
@@ -1665,6 +1804,10 @@ def create_rgb_page():
     app_state["z2_hex"] = "ff6600"
     app_state["z3_hex"] = "ff6600"
     app_state["z4_hex"] = "ff6600"
+    # Aerox extras
+    app_state["reactive_hex"] = "off"
+    app_state["rainbow_enabled"] = False
+    app_state["default_lighting"] = "rainbow"
     app_state["color_buttons"] = {}
     app_state["color_previews"] = {}
 
@@ -1693,10 +1836,16 @@ def create_rgb_page():
         app_state["color_previews"][key] = preview
 
         def on_draw(widget, cr):
-            h = app_state[key]
-            r = int(h[0:2], 16) / 255.0
-            g = int(h[2:4], 16) / 255.0
-            b = int(h[4:6], 16) / 255.0
+            h = app_state.get(key, "000000")
+            if h in ("off", "disable"):
+                r = g = b = 0.15
+            else:
+                try:
+                    r = int(h[0:2], 16) / 255.0
+                    g = int(h[2:4], 16) / 255.0
+                    b = int(h[4:6], 16) / 255.0
+                except Exception:
+                    r = g = b = 0.0
             cr.set_source_rgb(r, g, b)
             cr.paint()
             return False
@@ -1708,14 +1857,10 @@ def create_rgb_page():
             app_state[key] = rgba_to_hex(col)
             preview.queue_draw()
             if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                color_map = {
-                    "z1_hex": "--strip-top-color",
-                    "z2_hex": "--strip-middle-color",
-                    "z3_hex": "--strip-bottom-color",
-                    "z4_hex": "--logo-color",
-                }
-                if key in color_map:
-                    run_rivalcfg([color_map[key], app_state[key]])
+                if key in color_flags:
+                    run_rivalcfg([color_flags[key], app_state[key]])
+                elif key == "reactive_hex" and caps.get("has_reactive"):
+                    run_rivalcfg(["--reactive-color", app_state[key]])
 
         color_btn.connect("color-set", on_color_set)
         return row
@@ -1723,7 +1868,8 @@ def create_rgb_page():
     card.pack_start(make_color_row(_("Z1 - Top Strip"), "ff6600", "z1_hex"), False, False, 0)
     card.pack_start(make_color_row(_("Z2 - Middle Strip"), "ff6600", "z2_hex"), False, False, 0)
     card.pack_start(make_color_row(_("Z3 - Bottom Strip"), "ff6600", "z3_hex"), False, False, 0)
-    card.pack_start(make_color_row(_("Z4 - Logo"), "ff6600", "z4_hex"), False, False, 0)
+    if caps.get("has_logo"):
+        card.pack_start(make_color_row(_("Z4 - Logo"), "ff6600", "z4_hex"), False, False, 0)
 
     effect_title = Gtk.Label(label=_("EFFECT"))
     effect_title.get_style_context().add_class("card-title")
@@ -1731,42 +1877,114 @@ def create_rgb_page():
     effect_title.set_margin_top(12)
     card.pack_start(effect_title, False, False, 0)
 
-    effects = [
-        (_("Steady"), "steady"),
-        (_("Breath"), "breath"),
-        (_("Breath (Slow)"), "breath-slow"),
-        (_("Breath (Fast)"), "breath-fast"),
-        (_("Rainbow Shift"), "rainbow-shift"),
-        (_("Rainbow Breath"), "rainbow-breath"),
-        (_("Disco"), "disco"),
-    ]
-    app_state["selected_effect"] = "steady"
-    app_state["effect_radios"] = {}
-    eff_group = None
+    if is_aerox:
+        # Aerox family: no --light-effect. Uses -e/--rainbow-effect flag,
+        # -a/--reactive-color and -d/--default-lighting.
+        app_state["selected_effect"] = "steady"
+        app_state["effect_radios"] = {}
 
-    eff_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        rainbow_check = Gtk.CheckButton(label=_("Rainbow effect"))
+        rainbow_check.set_active(False)
+        card.pack_start(rainbow_check, False, False, 0)
+        app_state["rainbow_check"] = rainbow_check
 
-    for name, value in effects:
-        if eff_group is None:
-            rb = Gtk.RadioButton(label=name)
-            eff_group = rb
-            rb.set_active(value == "steady")
-        else:
-            rb = Gtk.RadioButton(label=name, group=eff_group)
-            rb.set_active(value == "steady")
+        def on_rainbow_toggled(button):
+            app_state["rainbow_enabled"] = button.get_active()
+            app_state["selected_effect"] = "rainbow" if button.get_active() else "steady"
+            if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
+                if button.get_active():
+                    run_rivalcfg(["--rainbow-effect"])
+                else:
+                    # Clearing rainbow by re-applying current colors
+                    run_rivalcfg([color_flags.get("z1_hex", "--top-color"), app_state["z1_hex"]])
 
-        app_state["effect_radios"][value] = rb
+        rainbow_check.connect("toggled", on_rainbow_toggled)
 
-        def on_effect_toggled(button, val=value):
-            if button.get_active():
-                app_state["selected_effect"] = val
+        if caps.get("has_reactive"):
+            reactive_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            reactive_label = Gtk.Label(label=_("Reactive color"))
+            reactive_label.set_size_request(100, -1)
+            reactive_label.set_halign(Gtk.Align.START)
+            reactive_row.pack_start(reactive_label, False, False, 0)
+            reactive_off = Gtk.CheckButton(label=_("Off"))
+            reactive_off.set_active(True)
+            reactive_row.pack_start(reactive_off, False, False, 0)
+            app_state["reactive_off_check"] = reactive_off
+
+            def on_reactive_off_toggled(button):
+                if button.get_active():
+                    app_state["reactive_hex"] = "off"
+                else:
+                    # Keep current picker value
+                    btn = app_state["color_buttons"].get("reactive_hex")
+                    if btn is not None:
+                        app_state["reactive_hex"] = rgba_to_hex(btn.get_rgba())
                 if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                    run_rivalcfg(["--light-effect", val])
+                    run_rivalcfg(["--reactive-color", app_state["reactive_hex"]])
 
-        rb.connect("toggled", on_effect_toggled)
-        eff_box.pack_start(rb, False, False, 0)
+            reactive_off.connect("toggled", on_reactive_off_toggled)
+            card.pack_start(reactive_row, False, False, 0)
+            card.pack_start(make_color_row(_("Reactive"), "00ff00", "reactive_hex"), False, False, 0)
 
-    card.pack_start(eff_box, False, False, 0)
+        if caps.get("has_default_lighting"):
+            dl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            dl_label = Gtk.Label(label=_("Default lighting"))
+            dl_label.set_size_request(100, -1)
+            dl_label.set_halign(Gtk.Align.START)
+            dl_row.pack_start(dl_label, False, False, 0)
+            dl_combo = Gtk.ComboBoxText()
+            dl_options = ["off", "reactive", "rainbow", "reactive-rainbow"]
+            for opt in dl_options:
+                dl_combo.append_text(opt)
+            dl_combo.set_active(2)
+            dl_row.pack_start(dl_combo, False, False, 0)
+            app_state["default_lighting_combo"] = dl_combo
+
+            def on_dl_changed(combo):
+                val = combo.get_active_text()
+                app_state["default_lighting"] = val
+                if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
+                    run_rivalcfg(["--default-lighting", val])
+
+            dl_combo.connect("changed", on_dl_changed)
+            card.pack_start(dl_row, False, False, 0)
+    else:
+        effects = [
+            (_("Steady"), "steady"),
+            (_("Breath"), "breath"),
+            (_("Breath (Slow)"), "breath-slow"),
+            (_("Breath (Fast)"), "breath-fast"),
+            (_("Rainbow Shift"), "rainbow-shift"),
+            (_("Rainbow Breath"), "rainbow-breath"),
+            (_("Disco"), "disco"),
+        ]
+        app_state["selected_effect"] = "steady"
+        app_state["effect_radios"] = {}
+        eff_group = None
+
+        eff_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+
+        for name, value in effects:
+            if eff_group is None:
+                rb = Gtk.RadioButton(label=name)
+                eff_group = rb
+                rb.set_active(value == "steady")
+            else:
+                rb = Gtk.RadioButton(label=name, group=eff_group)
+                rb.set_active(value == "steady")
+
+            app_state["effect_radios"][value] = rb
+
+            def on_effect_toggled(button, val=value):
+                if button.get_active():
+                    app_state["selected_effect"] = val
+                    if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
+                        run_rivalcfg(["--light-effect", val])
+
+            rb.connect("toggled", on_effect_toggled)
+            eff_box.pack_start(rb, False, False, 0)
+
+        card.pack_start(eff_box, False, False, 0)
 
     apply_btn = Gtk.Button(label=_("APPLY"))
     apply_btn.get_style_context().add_class("apply-btn")
@@ -1775,33 +1993,75 @@ def create_rgb_page():
 
     def on_apply_rgb(btn):
         save_active_profile()
+        caps_now = get_device_caps()
+        flags = caps_now.get("color_flags", {})
         z1 = app_state["z1_hex"]
         z2 = app_state["z2_hex"]
         z3 = app_state["z3_hex"]
         z4 = app_state["z4_hex"]
+        if caps_now.get("lighting_mode") == "aerox":
+            # Chain: z1 -> z2 -> z3 -> reactive -> rainbow/default-lighting.
+            # Setting a color clears rainbow, so rainbow flag goes last.
+            def after_z1(success, msg):
+                if not success:
+                    return
+                run_rivalcfg([flags.get("z2_hex", "--middle-color"), z2], after_z2)
+
+            def after_z2(success, msg):
+                if not success:
+                    return
+                run_rivalcfg([flags.get("z3_hex", "--bottom-color"), z3], after_z3)
+
+            def after_z3(success, msg):
+                if not success:
+                    return
+                if caps_now.get("has_reactive"):
+                    run_rivalcfg(["--reactive-color", app_state.get("reactive_hex", "off")], after_reactive)
+                else:
+                    after_reactive(True, "")
+
+            def after_reactive(success, msg):
+                if not success:
+                    return
+                if app_state.get("rainbow_enabled"):
+                    run_rivalcfg(["--rainbow-effect"], after_rainbow)
+                else:
+                    after_rainbow(True, "")
+
+            def after_rainbow(success, msg):
+                if not success:
+                    return
+                if caps_now.get("has_default_lighting"):
+                    run_rivalcfg(["--default-lighting", app_state.get("default_lighting", "rainbow")])
+
+            run_rivalcfg([flags.get("z1_hex", "--top-color"), z1], after_z1)
+            return
         effect = app_state["selected_effect"]
 
         def after_z1(success, msg):
             if not success:
                 return
-            run_rivalcfg(["--strip-middle-color", z2], after_z2)
+            run_rivalcfg([flags.get("z2_hex", "--strip-middle-color"), z2], after_z2)
 
         def after_z2(success, msg):
             if not success:
                 return
-            run_rivalcfg(["--strip-bottom-color", z3], after_z3)
+            run_rivalcfg([flags.get("z3_hex", "--strip-bottom-color"), z3], after_z3)
 
         def after_z3(success, msg):
             if not success:
                 return
-            run_rivalcfg(["--logo-color", z4], after_z4)
+            if caps_now.get("has_logo"):
+                run_rivalcfg([flags.get("z4_hex", "--logo-color"), z4], after_z4)
+            else:
+                after_z4(True, "")
 
         def after_z4(success, msg):
             if not success:
                 return
             run_rivalcfg(["--light-effect", effect])
 
-        run_rivalcfg(["--strip-top-color", z1], after_z1)
+        run_rivalcfg([flags.get("z1_hex", "--strip-top-color"), z1], after_z1)
 
     apply_btn.connect("clicked", on_apply_rgb)
     card.pack_start(apply_btn, False, False, 0)
@@ -1842,6 +2102,9 @@ def create_buttons_page():
         "button4": "button4",
         "button5": "button5",
         "button6": "dpi",
+        "button7": "disabled",
+        "button8": "disabled",
+        "button9": "disabled",
         "scrollup": "scrollup",
         "scrolldown": "scrolldown",
     }
@@ -2027,14 +2290,7 @@ def create_buttons_page():
         popover.popdown()
         if app_state["settings"].get("auto_apply"):
             m = app_state["button_mapping"]
-            arg = (
-                f"buttons(button1={m['button1']}; button2={m['button2']}; "
-                f"button3={m['button3']}; button4={m['button4']}; "
-                f"button5={m['button5']}; button6={m['button6']}; "
-                f"scrollup={m['scrollup']}; scrolldown={m['scrolldown']}; "
-                f"layout=qwerty)"
-            )
-            run_rivalcfg(["--buttons", arg])
+            run_rivalcfg(["--buttons", build_buttons_arg(m)])
 
     for opt_val, opt_label in button_options:
         btn = Gtk.Button(label=opt_label)
@@ -2567,14 +2823,7 @@ def create_buttons_page():
     def on_apply_buttons(btn):
         save_active_profile()
         m = app_state["button_mapping"]
-        arg = (
-            f"buttons(button1={m['button1']}; button2={m['button2']}; "
-            f"button3={m['button3']}; button4={m['button4']}; "
-            f"button5={m['button5']}; button6={m['button6']}; "
-            f"scrollup={m['scrollup']}; scrolldown={m['scrolldown']}; "
-            f"layout=qwerty)"
-        )
-        run_rivalcfg(["--buttons", arg])
+        run_rivalcfg(["--buttons", build_buttons_arg(m)])
 
     apply_btn.connect("clicked", on_apply_buttons)
     btn_row.pack_start(apply_btn, False, False, 0)
@@ -2590,6 +2839,9 @@ def create_buttons_page():
             "button4": "button4",
             "button5": "button5",
             "button6": "dpi",
+            "button7": "disabled",
+            "button8": "disabled",
+            "button9": "disabled",
             "scrollup": "scrollup",
             "scrolldown": "scrolldown",
         }
@@ -2713,15 +2965,37 @@ def apply_profile_to_ui(profile):
         for hz, rb in app_state["polling_radios"].items():
             rb.set_active(hz == profile["polling_hz"])
 
-    for key in ["z1_hex", "z2_hex", "z3_hex", "z4_hex"]:
+    for key in ["z1_hex", "z2_hex", "z3_hex", "z4_hex", "reactive_hex"]:
         if key in profile:
-            app_state[key] = profile[key]
-            if key in app_state.get("color_buttons", {}):
-                rgba = Gdk.RGBA()
-                rgba.parse(f"#{profile[key]}")
-                app_state["color_buttons"][key].set_rgba(rgba)
+            val = profile[key]
+            # Old Rival-only profiles may lack aerox keys; keep defaults.
+            app_state[key] = val
+            if key in app_state.get("color_buttons", {}) and val not in ("off", "disable"):
+                try:
+                    rgba = Gdk.RGBA()
+                    rgba.parse(f"#{val}")
+                    app_state["color_buttons"][key].set_rgba(rgba)
+                except Exception:
+                    pass
             if key in app_state.get("color_previews", {}):
                 app_state["color_previews"][key].queue_draw()
+
+    if "rainbow_enabled" in profile:
+        app_state["rainbow_enabled"] = bool(profile["rainbow_enabled"])
+        if "rainbow_check" in app_state:
+            app_state["rainbow_check"].set_active(bool(profile["rainbow_enabled"]))
+        # Keep selected_effect in sync for aerox mode
+        if profile.get("rainbow_enabled"):
+            app_state["selected_effect"] = "rainbow"
+    if "reactive_hex" in profile and "reactive_off_check" in app_state:
+        app_state["reactive_off_check"].set_active(profile["reactive_hex"] in ("off", "disable", ""))
+    if "default_lighting" in profile:
+        app_state["default_lighting"] = profile["default_lighting"]
+        combo = app_state.get("default_lighting_combo")
+        if combo is not None:
+            opts = ["off", "reactive", "rainbow", "reactive-rainbow"]
+            if profile["default_lighting"] in opts:
+                combo.set_active(opts.index(profile["default_lighting"]))
 
     if "selected_effect" in profile and "effect_radios" in app_state:
         for effect, rb in app_state["effect_radios"].items():
@@ -2802,6 +3076,8 @@ def apply_profile_to_ui(profile):
 def apply_all_to_device():
     """Apply all current profile settings to the device with a single rivalcfg call."""
     save_active_profile()
+    caps = get_device_caps()
+    flags = caps.get("color_flags", {})
 
     args = []
 
@@ -2817,30 +3093,73 @@ def apply_all_to_device():
     z2 = app_state.get("z2_hex")
     z3 = app_state.get("z3_hex")
     z4 = app_state.get("z4_hex")
-    effect = app_state.get("selected_effect")
-    if z1:
-        args.extend(["--strip-top-color", z1])
-    if z2:
-        args.extend(["--strip-middle-color", z2])
-    if z3:
-        args.extend(["--strip-bottom-color", z3])
-    if z4:
-        args.extend(["--logo-color", z4])
-    if effect:
-        args.extend(["--light-effect", effect])
+    if caps.get("lighting_mode") == "aerox":
+        if z1:
+            args.extend([flags.get("z1_hex", "--top-color"), z1])
+        if z2:
+            args.extend([flags.get("z2_hex", "--middle-color"), z2])
+        if z3:
+            args.extend([flags.get("z3_hex", "--bottom-color"), z3])
+        if caps.get("has_reactive"):
+            args.extend(["--reactive-color", app_state.get("reactive_hex", "off")])
+        # NOTE: --rainbow-effect is a flag without value; sending it together
+        # with colors in one call is not supported by rivalcfg chaining here.
+        # Apply rainbow/default-lighting in a follow-up call if needed.
+        extra = []
+        if app_state.get("rainbow_enabled"):
+            extra.append("--rainbow-effect")
+        dl = app_state.get("default_lighting")
+        if caps.get("has_default_lighting") and dl:
+            extra.extend(["--default-lighting", dl])
+    else:
+        effect = app_state.get("selected_effect")
+        if z1:
+            args.extend([flags.get("z1_hex", "--strip-top-color"), z1])
+        if z2:
+            args.extend([flags.get("z2_hex", "--strip-middle-color"), z2])
+        if z3:
+            args.extend([flags.get("z3_hex", "--strip-bottom-color"), z3])
+        if z4 and caps.get("has_logo"):
+            args.extend([flags.get("z4_hex", "--logo-color"), z4])
+        if effect and caps.get("has_light_effect", True):
+            args.extend(["--light-effect", effect])
+        extra = []
 
     mapping = app_state.get("button_mapping")
     if mapping:
-        btn_arg = (
-            f"buttons(button1={mapping['button1']}; button2={mapping['button2']}; "
-            f"button3={mapping['button3']}; button4={mapping['button4']}; "
-            f"button5={mapping['button5']}; button6={mapping['button6']}; "
-            f"scrollup={mapping['scrollup']}; scrolldown={mapping['scrolldown']}; "
-            f"layout=qwerty)"
-        )
+        if caps.get("has_extra_buttons"):
+            btn_arg = (
+                f"buttons(button1={mapping.get('button1', 'button1')}; "
+                f"button2={mapping.get('button2', 'button2')}; "
+                f"button3={mapping.get('button3', 'button3')}; "
+                f"button4={mapping.get('button4', 'button4')}; "
+                f"button5={mapping.get('button5', 'button5')}; "
+                f"button6={mapping.get('button6', 'dpi')}; "
+                f"button7={mapping.get('button7', 'disabled')}; "
+                f"button8={mapping.get('button8', 'disabled')}; "
+                f"button9={mapping.get('button9', 'disabled')}; "
+                f"scrollup={mapping.get('scrollup', 'scrollup')}; "
+                f"scrolldown={mapping.get('scrolldown', 'scrolldown')}; "
+                f"layout=qwerty)"
+            )
+        else:
+            btn_arg = (
+                f"buttons(button1={mapping['button1']}; button2={mapping['button2']}; "
+                f"button3={mapping['button3']}; button4={mapping['button4']}; "
+                f"button5={mapping['button5']}; button6={mapping['button6']}; "
+                f"scrollup={mapping['scrollup']}; scrolldown={mapping['scrolldown']}; "
+                f"layout=qwerty)"
+            )
         args.extend(["--buttons", btn_arg])
 
     if args:
+        if extra:
+            def _after_main(success, msg, _extra=extra):
+                if success:
+                    run_rivalcfg(_extra)
+            run_rivalcfg(args, _after_main)
+        else:
+            run_rivalcfg(args)
         run_rivalcfg(args)
         if app_state["settings"].get("hyprland_mouse_sync") and HYPRLAND_AVAILABLE:
             dpi_vals = app_state.get("dpi_values")
@@ -3215,8 +3534,10 @@ def create_settings_page():
 
     def on_check_mouse(btn):
         def on_detect(success, msg):
-            if success and "184c" in msg:
-                GLib.idle_add(set_status, "ok", "✓ " + _("Mouse connected"))
+            if success and is_steelseries_connected(msg):
+                caps = get_device_caps(force=True)
+                label = caps.get("device_label") or _("Mouse connected")
+                GLib.idle_add(set_status, "ok", "✓ " + label)
             else:
                 GLib.idle_add(set_status, "error", "✗ " + _("Mouse not found"))
 
@@ -3263,36 +3584,61 @@ def create_settings_page():
                 if not success:
                     GLib.idle_add(set_status, "error", "✗ " + _("Mouse not connected"))
                     return
+                caps_now = get_device_caps()
+                flags = caps_now.get("color_flags", {})
                 orange = "ff6600"
-                for key in ["z1_hex", "z2_hex", "z3_hex", "z4_hex"]:
-                    app_state[key] = orange
-                    if key in app_state.get("color_buttons", {}):
+                for key in ["z1_hex", "z2_hex", "z3_hex", "z4_hex", "reactive_hex"]:
+                    default_val = "off" if key == "reactive_hex" else orange
+                    app_state[key] = default_val
+                    if key in app_state.get("color_buttons", {}) and default_val != "off":
                         rgba = Gdk.RGBA()
-                        rgba.parse(f"#{orange}")
+                        rgba.parse(f"#{default_val}")
                         app_state["color_buttons"][key].set_rgba(rgba)
                     if key in app_state.get("color_previews", {}):
                         app_state["color_previews"][key].queue_draw()
+                if "rainbow_check" in app_state:
+                    app_state["rainbow_check"].set_active(False)
+                app_state["rainbow_enabled"] = False
+                app_state["selected_effect"] = "steady"
                 z1 = app_state["z1_hex"]
                 z2 = app_state["z2_hex"]
                 z3 = app_state["z3_hex"]
                 z4 = app_state["z4_hex"]
-                def after_z1(success, msg):
-                    if not success:
-                        return
-                    run_rivalcfg(["--strip-middle-color", z2], after_z2)
-                def after_z2(success, msg):
-                    if not success:
-                        return
-                    run_rivalcfg(["--strip-bottom-color", z3], after_z3)
-                def after_z3(success, msg):
-                    if not success:
-                        return
-                    run_rivalcfg(["--logo-color", z4], after_z4)
-                def after_z4(success, msg):
-                    if not success:
-                        return
-                    run_rivalcfg(["--light-effect", "steady"])
-                run_rivalcfg(["--strip-top-color", z1], after_z1)
+                if caps_now.get("lighting_mode") == "aerox":
+                    def after_z1(success, msg):
+                        if not success:
+                            return
+                        run_rivalcfg([flags.get("z2_hex", "--middle-color"), z2], after_z2)
+                    def after_z2(success, msg):
+                        if not success:
+                            return
+                        run_rivalcfg([flags.get("z3_hex", "--bottom-color"), z3], after_z3)
+                    def after_z3(success, msg):
+                        if not success:
+                            return
+                        if caps_now.get("has_default_lighting"):
+                            run_rivalcfg(["--default-lighting", "rainbow"])
+                        else:
+                            run_rivalcfg(["--rainbow-effect"])
+                    run_rivalcfg([flags.get("z1_hex", "--top-color"), z1], after_z1)
+                else:
+                    def after_z1(success, msg):
+                        if not success:
+                            return
+                        run_rivalcfg([flags.get("z2_hex", "--strip-middle-color"), z2], after_z2)
+                    def after_z2(success, msg):
+                        if not success:
+                            return
+                        run_rivalcfg([flags.get("z3_hex", "--strip-bottom-color"), z3], after_z3)
+                    def after_z3(success, msg):
+                        if not success:
+                            return
+                        run_rivalcfg([flags.get("z4_hex", "--logo-color"), z4], after_z4)
+                    def after_z4(success, msg):
+                        if not success:
+                            return
+                        run_rivalcfg(["--light-effect", "steady"])
+                    run_rivalcfg([flags.get("z1_hex", "--strip-top-color"), z1], after_z1)
                 save_active_profile()
             run_rivalcfg(["--reset"], cb)
 
@@ -3860,9 +4206,11 @@ def create_window_content(window):
     if not app_state.get("is_rebuild"):
         def startup_check():
             def cb(success, msg):
-                if success and "184c" in msg:
+                if success and is_steelseries_connected(msg):
                     logging.info("Startup: mouse connected")
-                    set_status("ok", "✓ " + _("Mouse connected"))
+                    caps = get_device_caps(force=True)
+                    label = caps.get("device_label") or _("Mouse connected")
+                    set_status("ok", "✓ " + label)
                 else:
                     logging.warning("Startup: mouse not found")
                     set_status("error", "✗ " + _("Mouse not found"))
