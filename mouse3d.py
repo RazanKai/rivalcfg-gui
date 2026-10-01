@@ -496,6 +496,10 @@ def _cell_template():
 
 
 _HONEY_TEMPLATE = _cell_template()
+# How far a cell reaches from its node: the corner radius shaves the diamond
+# tips, so this is a little under the 2.2 mm vertex radius, and it -- not
+# ``_HONEY_HALF`` -- is what has to stay inside the sampled shell.
+_HONEY_TIP = max(abs(dv) for _du, dv in _HONEY_TEMPLATE)
 
 
 def _honey_accept(y_mm, u_mm, x_mm, length):
@@ -509,7 +513,7 @@ def _honey_accept(y_mm, u_mm, x_mm, length):
         t = min(1.0, max(0.0, (y_mm - _HONEY_REAR_Y)
                           / (_HONEY_WRAP_Y - _HONEY_REAR_Y)))
         reach = (_HONEY_WRAP0 + (_HONEY_WRAP1 - _HONEY_WRAP0) * t) * length
-        if abs(u_mm) + _HONEY_HALF > reach:
+        if abs(u_mm) + _HONEY_TIP > reach:
             return False
         dx, dy, rx, ry = _HONEY_DPI
         return ((x_mm - dx) / rx) ** 2 + ((y_mm - dy) / ry) ** 2 >= 1.0
@@ -520,23 +524,30 @@ def _honey_accept(y_mm, u_mm, x_mm, length):
 def build_honeycomb():
     """Honeycomb openings as loops on the shell (normalised coordinates)."""
     cell = _HONEY_CELL
+    tip = _HONEY_TIP
+    # Rows run from just behind the keycaps to the tail, on a lattice whose
+    # phase is fixed by _HONEY_REAR_Y.  Where the field *ends* is free, and
+    # the last row is the one that leaves the tail rim the reference views
+    # show (~3 mm); anchoring on the keycap edge instead left whatever gap
+    # the phase happened to leave -- 6 mm of bare shell at the tail.  The
+    # phase itself has to stay put: the wheel-side band and the rear field
+    # share it, and shifting one against the other makes the bare strip
+    # between them stop being a whole number of cells.
+    top = _HONEY_REAR_Y + math.floor(
+        (_HONEY_YS[-1] - tip - _HONEY_REAR_Y) / cell) * cell
     loops = []
-    first = int((24.0 - _HONEY_REAR_Y) / cell) - 1
-    last = int((_HONEY_YS[-1] - _HONEY_REAR_Y) / cell) + 1
-    for row in range(first, last + 1):
-        v0 = _HONEY_REAR_Y + row * cell
-        if v0 < 24.0 or v0 > _HONEY_YS[-1]:
+    for row in range(math.floor((24.0 - top) / cell), 1):
+        v0 = top + row * cell
+        if v0 < 24.0:
             continue
         off = 0.0 if row % 2 == 0 else cell
         for i in range(-20, 21):
             u0 = off + i * 2 * cell
-            if v0 + _HONEY_HALF > _HONEY_YS[-1] - 0.3:
-                continue
             x, _z, length = _surface_pt(v0, u0)
             if v0 >= _HONEY_REAR_Y:
-                # The rear corners sit further back, where the flank is
-                # shorter; cull against the tighter of the two.
-                _x, _z, rear = _surface_pt(v0 + _HONEY_HALF, u0)
+                # The tips of the rear cells sit further back, where the
+                # flank is shorter; cull against the tighter of the two.
+                _x, _z, rear = _surface_pt(v0 + tip, u0)
                 length = min(length, rear)
             if not _honey_accept(v0, u0, x, length):
                 continue
