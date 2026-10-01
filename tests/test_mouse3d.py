@@ -17,8 +17,9 @@ def test_stations_are_ordered_front_to_back():
 
 def test_shell_bounds_are_realistic():
     a, b, t = mouse3d._interp_station(0.0)
-    # Real proportions of the Aerox 5 (~128.8 x 68.6 x 42.1 mm), length
-    # normalised to 1: half-width ~0.266, top height ~0.32 at the middle.
+    # Real proportions of the Aerox 5 (the mesh bakes to 127.6 x 68.2 x
+    # 42.9 mm), length normalised to 1: half-width ~0.266, top height ~0.32
+    # at the middle.
     assert 0.24 < a < 0.30
     assert 0.28 < t < 0.35
 
@@ -26,7 +27,8 @@ def test_shell_bounds_are_realistic():
 def test_wireframe_has_rings_and_longitudinals():
     rings, longs = mouse3d.build_wireframe()
     assert len(rings) == len(mouse3d._STATIONS)
-    assert len(longs) == mouse3d._RING_STEPS
+    steps = len(range(0, mouse3d._RING_STEPS, mouse3d._LOFT_EVERY))
+    assert len(longs) == steps
     assert all(len(r) == mouse3d._RING_STEPS for r in rings)
 
 
@@ -56,38 +58,62 @@ def test_scroll_directions_are_not_separate_facets():
     assert "scrolldown" not in mouse3d.BUTTONS
 
 
-def _hole_span(hole):
-    xs = [p.x for p in hole]
-    ys = [p.y for p in hole]
-    return (max(xs) - min(xs)) + (max(ys) - min(ys))
+def _hole_pts(hole):
+    return hole["pts"]
 
 
-def test_honeycomb_is_coarse():
-    """The real mouse has a relatively coarse perforation, not a fine mesh."""
-    assert 40 <= len(mouse3d.DETAILS["holes"]) <= 160
+def _hole_station_mm(hole):
+    return hole["center"].y * mouse3d._MM + mouse3d._Y0_MM
+
+
+def test_honeycomb_lattice_matches_the_reference():
+    """Measured off the official 1:1 top view: rounded-diamond openings on a
+    staggered lattice, 3.45 mm between nearest neighbours -- a coarse
+    perforation, not a fine mesh."""
+    holes = mouse3d.DETAILS["holes"]
+    assert holes
+    pitch = mouse3d._HONEY_CELL
+    stations = sorted({round(_hole_station_mm(h), 3) for h in holes})
+    gaps = [b - a for a, b in zip(stations, stations[1:])]
+    assert gaps
+    assert min(gaps) >= pitch - 1e-6
+    # A whole row can be culled locally (the wheel patches, the CPI housing),
+    # so gaps are whole multiples of the pitch rather than exactly one.
+    for gap in gaps:
+        assert abs(gap / pitch - round(gap / pitch)) < 1e-6, gap
+    # ~4 mm across, the corner radius shaving the diamond's tips.
+    dy = [max(p.y for p in _hole_pts(h)) - min(p.y for p in _hole_pts(h))
+          for h in holes]
+    assert 3.5 < max(dy) * mouse3d._MM < 4.4
 
 
 def test_honeycomb_spans_crown_to_flank():
     """Holes run from the crown all the way down to the base plate."""
     holes = mouse3d.DETAILS["holes"]
-    zmean = [sum(p.z for p in h) / len(h) for h in holes]
+    zmean = [sum(p.z for p in _hole_pts(h)) / len(_hole_pts(h)) for h in holes]
     assert min(zmean) < 0.22      # reaches low on the flank
     assert max(zmean) > 0.30      # and is present on the crown
 
 
-def test_honeycomb_holes_vary_in_size():
-    """The holes are not all the same size: they grow from crown to flank and
-    from nose to tail."""
+def test_honeycomb_holes_are_uniform_on_the_surface():
+    """The openings are one uniform lattice laid on the shell: every cell
+    spans the same distance along the body, so the perforation never
+    thickens or thins from nose to tail.  What varies in a projected view is
+    the surface wrapping away from the camera, not the cell size."""
     holes = mouse3d.DETAILS["holes"]
-    sizes = [_hole_span(h) for h in holes]
-    assert max(sizes) > 1.2 * min(sizes)
+    spans = [max(p.y for p in _hole_pts(h)) - min(p.y for p in _hole_pts(h))
+             for h in holes]
+    assert spans
+    assert max(spans) - min(spans) < 1e-9
 
 
-def test_honeycomb_reaches_under_the_keycap():
-    """The keycap's lower edge carries holes too (the perforation starts
-    forward of where the keycap ends)."""
+def test_honeycomb_reaches_forward_of_the_body_centre():
+    """The perforation is not only the rear field: the two patches flanking
+    the scroll wheel carry it too, well forward of the body centre."""
     holes = mouse3d.DETAILS["holes"]
-    assert any(max(p.y for p in h) < 0.0 for h in holes)
+    forward = [h for h in holes if h["center"].y < 0.0]
+    assert forward
+    assert min(_hole_station_mm(h) for h in forward) < 35.0
 
 
 def test_lever_spans_the_thumb_buttons():
@@ -123,18 +149,28 @@ def test_click_panels_converge_toward_the_nose():
     narrow leading edge at the nose (top view): the width grows monotonically
     from the leading edge to the widest point."""
     _label, poly = mouse3d.BUTTONS["button1"]
-    rows = {}
+    # Width per band along the body.  Bands rather than exact ``y`` rows:
+    # the outline is a dense curve, so several points share a station and
+    # grouping on the raw float splits a single station into two rows.
+    ys = [p.y for p in poly]
+    lo, hi = min(ys), max(ys)
+    bands = 100
+    width = [0.0] * bands
     for p in poly:
-        rows.setdefault(round(p.y, 4), []).append(abs(p.x))
-    prof = [(y, max(rows[y])) for y in sorted(rows)]
-    front_w = prof[0][1]
-    widest = max(w for _y, w in prof)
+        k = min(bands - 1, int((p.y - lo) / (hi - lo) * bands))
+        width[k] = max(width[k], abs(p.x))
+    prof = [w for w in width if w > 0.0]
+    front_w = prof[0]
+    widest = max(prof)
     # the leading edge is much narrower than the widest point
     assert front_w < 0.5 * widest
-    # and the width never decreases from the nose toward the widest point
-    peak = max(range(len(prof)), key=lambda i: prof[i][1])
-    seq = [w for _y, w in prof[:peak + 1]]
-    assert all(seq[i] <= seq[i + 1] + 1e-6 for i in range(len(seq) - 1))
+    # and the width never decreases from the nose toward the widest point.
+    # The outline is a snapped curve, so a band's maximum wobbles by a
+    # fraction of a percent; a real pinch is an order of magnitude larger.
+    peak = max(range(len(prof)), key=lambda i: prof[i])
+    seq = prof[:peak + 1]
+    assert all(seq[i] <= seq[i + 1] + 0.02 * widest
+               for i in range(len(seq) - 1))
 
 
 def test_click_panels_wrap_down_the_nose():
@@ -166,12 +202,17 @@ def test_keycaps_clear_the_wheel_and_dpi():
     dx = max(abs(p[0]) for p in dpi)
     dy0, dy1 = min(p[1] for p in dpi), max(p[1] for p in dpi)
 
+    # The cap's inner edge is authored flush with the wheel, and the outline
+    # is a resampled curve, so a sample can land a hair inside by less than
+    # a hundredth of a millimetre.  Anything larger is real contact.
+    tol = 5e-5
+
     for key in ("button1", "button2"):
         for p in mouse3d.BUTTONS[key][1]:
             if wf - 0.004 < p.y < wb + 0.004:
-                assert abs(p.x) >= hw - 1e-6, (key, p)   # clear of the wheel
+                assert abs(p.x) >= hw - tol, (key, p)    # clear of the wheel
             if dy0 - 0.003 < p.y < dy1 + 0.003:
-                assert abs(p.x) >= dx - 1e-6, (key, p)   # clear of the CPI
+                assert abs(p.x) >= dx - tol, (key, p)    # clear of the CPI
 
 
 def test_keycaps_have_split_channel_after_the_wheel():

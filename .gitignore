@@ -15,5 +15,8 @@ evdev_helper
 # Flatpak build directory
 build-dir/
 
+# Mesh build artefacts (regenerate with tools/aerox5_model.py)
+build/
+
 # Standalone rivalcfg downloaded during Debian build
 rivalcfg-cli_v*/

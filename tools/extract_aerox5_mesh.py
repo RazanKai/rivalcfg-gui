@@ -10,6 +10,12 @@ that exist as separate OBJ groups, and rasterises top/side surface lookup
 grids used to snap the remaining (parametric) buttons onto the real
 surface.
 
+The whole pipeline lives in the repo and regenerates ``aerox5_mesh.py``
+byte for byte:
+
+    python3 tools/aerox5_model.py build          # -> build/aerox5_detailed.obj
+    python3 tools/extract_aerox5_mesh.py         # -> aerox5_mesh.py
+
 Usage:  python3 tools/extract_aerox5_mesh.py [path-to-aerox5.obj]
 Requires numpy (build-time only; the generated module is pure data).
 """
@@ -23,10 +29,12 @@ from collections import defaultdict
 
 import numpy as np
 
-OBJ_PATH = sys.argv[1] if len(sys.argv) > 1 else os.path.expanduser(
-    "~/Downloads/aerox5_detailed.obj")
-OUT_PATH = os.path.join(os.path.dirname(os.path.dirname(
-    os.path.abspath(__file__))), "aerox5_mesh.py")
+#: Repo root, and the OBJ that ``tools/aerox5_model.py build`` writes.
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+OBJ_DEFAULT = os.path.join(REPO_ROOT, "build", "aerox5_detailed.obj")
+
+OBJ_PATH = sys.argv[1] if len(sys.argv) > 1 else OBJ_DEFAULT
+OUT_PATH = os.path.join(REPO_ROOT, "aerox5_mesh.py")
 
 RING_COUNT = 26          # cross-section slices along the length
 RING_STEPS = 48          # uniform angular resample per ring

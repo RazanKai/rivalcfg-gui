@@ -20,7 +20,7 @@ Test OS: CachyOS + Hyprland/Wayland.
 | 5 | Behavior: consent, profiles, macro/setuid removal | **Partially done** (see below) |
 | 6 | Packaging, tests, CI, i18n | **Not started** |
 
-Tests: **54 passing** (`python -m pytest tests/`), no hardware required.
+Tests: **66 passing** (`python -m pytest tests/`), no hardware required.
 
 ---
 
@@ -419,10 +419,75 @@ still pink at `ff0000`, the wireless command path (readback/patch) needs investi
 ## How to run
 
 ```bash
-python -m pytest tests/      # 48 tests, no hardware
+python -m pytest tests/      # 66 tests, no hardware
 python rivalcfg_gui.py       # or: rivalcfg-gui (console script)
+```
+
+Regenerating the model data (numpy needed for both steps; the generated
+module is pure data, so the app itself still has no build step):
+
+```bash
+python3 tools/aerox5_model.py build     # -> build/aerox5_detailed.obj (+ .stl)
+python3 tools/extract_aerox5_mesh.py    # -> aerox5_mesh.py (byte-identical)
 ```
 
 Manual smoke checks performed during development (GTK Broadway backend):
 all 8 pages construct and draw; 3D facet click opens the assignment popover;
 colour editor gradient/palette/hex all update the selected target.
+
+---
+
+## 2026-10-02 — Shell rebuild against the official views; three geometry bugs
+
+The render "looked like a capsule" and the mesh read as a honeycomb of
+quadrilaterals.  Checked the station table and the cross-sections against the
+numbered official views and the photos first: both already matched to within
+1–2 mm, so the *data* was not the problem — the renderer was.  Rebuilt the
+perforation and the cap rendering.
+
+**Honeycomb.**  The old `_mesh.RIMS` (144 thin 4-point slits, ~2.4 × 6 mm) was
+replaced with a parametric lattice mapped onto the real shell.  Parameters
+come off the official 1:1 top view (0.35543 mm/px): rounded-diamond openings
+on a staggered lattice, nearest neighbours 3.45 mm apart, cell half-diagonal
+2.2 mm, corner radius 0.55 mm.  Cells are laid out in arc-length coordinates
+along each cross-section (`_ring_profiles`, 192 samples crown → base rim), so
+they stay square under the shoulder wrap, and each is culled per cell.
+Coverage: rear field from just behind the keycaps (54.5 mm) to the tail,
+wrapping the crown and down the flanks — plus the two patches flanking the
+wheel (29–50 mm).  Keycaps stay smooth.  257 cells.
+
+**Three bugs found in the process.**  All three were the same class of
+mistake — a profile walk that is only monotone from the *middle* of the body:
+
+1. `_snap_to_shell` broke out of its scan on the first step of the left
+   flank, because `|x|` there falls from the off-centre crown sample through
+   zero before it grows again.  The left keycap collapsed onto a single
+   spot: `button1` spanned x 0.018–0.037 (2.3 mm) instead of the full cap.
+   Cut the scan at the widest sample, and snap both flanks against the same
+   profile so the two caps stay exact mirrors.
+2. `_ring_profiles` trimmed a walk only where `z` crossed `_HONEY_RIM_Z`.
+   The low rings near the nose never drop that far, so they kept the *whole
+   closed loop* as their profile; stations are sampled at matching fractions
+   of their own length, so interpolating one against a properly trimmed
+   profile paired an underside sample with a flank sample.  Keycap points
+   were dragged to 6 mm off the deck and, further back, the profile shrank
+   to a fraction of its real width.  Fallback: trim at the ring's own lowest
+   point.
+3. `_smooth_closed` (Catmull-Rom) overshoots at a sharp corner; a side
+   button was bulging ~0.9 mm up the flank past the top of its own outline,
+   reading as a cap climbing the crown.  The result is now clamped to the
+   source outline's bounding box.
+
+**Also.**  Longitudinals are now one every `_LOFT_EVERY` (=3) ring points —
+a line per ring point read as a featureless grid.  Button fills lightened so
+the translucent keycaps let the perforation through.  `tools/aerox5_model.py`
+moved into the repo (was an unversioned `~/Downloads` file) and
+`tools/extract_aerox5_mesh.py` now defaults to `build/aerox5_detailed.obj`,
+so the checked-in `aerox5_mesh.py` regenerates byte-for-byte from a clean
+checkout.
+
+**Tests.**  66 passing.  The honeycomb tests were rewritten against the new
+`{"pts", "center", "normal"}` cell shape and now pin the measured lattice
+(pitch, cell extent, uniform span) rather than a magic count; the keycap
+nose-taper and wheel-clearance tests were made robust to the resampled
+outline rather than loosened.

@@ -125,15 +125,22 @@ class Point3D:
     z: float
 
 
+#: Draw one longitudinal every N ring points.  A line per ring point is a
+#: featureless grid that reads as a capsule; the sparser loft reads as a
+#: surface.
+_LOFT_EVERY = 3
+
+
 def build_wireframe():
     """Return ``(rings, longitudinals)`` as lists of 3D polylines.
 
     * ``rings``: cross-section outlines (one per extracted slice).
-    * ``longitudinals``: lines running front-to-back at each ring point.
+    * ``longitudinals``: lines running front-to-back every ``_LOFT_EVERY``
+      ring points.
     """
     rings = [[Point3D(x, y, z) for x, z in ring] for y, ring in _mesh.RINGS]
     longitudinals = []
-    for k in range(len(rings[0])):
+    for k in range(0, len(rings[0]), _LOFT_EVERY):
         longitudinals.append([rings[i][k] for i in range(len(rings))])
     return rings, longitudinals
 
@@ -141,6 +148,70 @@ def build_wireframe():
 # ---------------------------------------------------------------------------
 # Buttons (real cap outlines from the mesh)
 # ---------------------------------------------------------------------------
+
+def _smooth_closed(points, per_seg=6):
+    """Densify a closed loop of :class:`Point3D` (Catmull-Rom).
+
+    The extracted outlines have a point every ~4 mm, so their corners are
+    chords: stroked straight they read as flat plates bolted to the shell.
+
+    The result is clamped to the source outline's bounding box.  Catmull-Rom
+    overshoots at a sharp corner, and a side button was bulging ~0.9 mm up
+    the flank past the top of its own outline -- enough to read as a cap
+    climbing the crown.
+    """
+    lo = {c: min(getattr(p, c) for p in points) for c in ("x", "y", "z")}
+    hi = {c: max(getattr(p, c) for p in points) for c in ("x", "y", "z")}
+    out = []
+    n = len(points)
+    for i in range(n):
+        p0, p1 = points[i - 1], points[i]
+        p2, p3 = points[(i + 1) % n], points[(i + 2) % n]
+        for k in range(per_seg):
+            t = k / per_seg
+            t2, t3 = t * t, t * t * t
+            out.append(Point3D(*(
+                min(hi[c], max(lo[c],
+                    0.5 * (2 * getattr(p1, c) + (-getattr(p0, c) + getattr(p2, c)) * t
+                           + (2 * getattr(p0, c) - 5 * getattr(p1, c)
+                              + 4 * getattr(p2, c) - getattr(p3, c)) * t2
+                           + (-getattr(p0, c) + 3 * getattr(p1, c)
+                              - 3 * getattr(p2, c) + getattr(p3, c)) * t3)))
+                for c in ("x", "y", "z"))))
+    return out
+
+
+def _snap_to_shell(x, y, lift=0.006):
+    """Seat a normalised outline point *on* the shell, following its curve.
+
+    :func:`_cap_on_surface` only corrects height: a point that belongs on
+    the shoulder keeps its flat chord there, which is what makes the click
+    panels read as plates bolted over the shell.  This walks the cross-
+    section to the arc position with the same ``x`` and takes that point --
+    so the outline bends with the shell, over the crown and down the flank.
+    """
+    x_mm, y_mm = x * _MM, y * _MM + _Y0_MM
+    sign = -1.0 if x_mm < 0 else 1.0
+    i, t = _ring_span(y_mm)
+    # Both flanks are snapped against the same profile so the two keycaps
+    # stay exact mirrors of each other; the shell is symmetric to well
+    # under a millimetre, and the two sampled profiles are not identical,
+    # which otherwise showed up as a ~0.5 mm left/right keycap mismatch.
+    sides = _HONEY_POS
+    px = [sides[i][j][0] + (sides[i + 1][j][0] - sides[i][j][0]) * t
+          for j in range(_HONEY_PROFILE)]
+    pz = [sides[i][j][1] + (sides[i + 1][j][1] - sides[i][j][1]) * t
+          for j in range(_HONEY_PROFILE)]
+    # The profile runs crown -> widest point -> base rim, so ``|x|`` only
+    # grows up to the widest sample and curls back in after it.  Searching
+    # the whole profile would snap a shoulder point onto the underside; a
+    # simple "stop when |x| shrinks" walk instead fires on the very first
+    # step of the left flank, whose |x| falls from the off-centre crown
+    # sample through zero before it grows again.  Cut at the widest sample.
+    widest = max(range(_HONEY_PROFILE), key=lambda j: abs(px[j]))
+    best = min(range(widest + 1), key=lambda j: abs(px[j] - abs(x_mm)))
+    return sign * px[best] / _MM, y, pz[best] / _MM + lift
+
 
 def _cap_on_surface(key, lift=0.006):
     """Re-lift a top-button cap outline onto the curved top surface.
@@ -151,11 +222,26 @@ def _cap_on_surface(key, lift=0.006):
     """
     source = getattr(_mesh, "CAP_OUTLINES", {}).get(key) or _mesh.CAPS[key]
     pts = []
-    for x, y, _z in source:
-        z = top_surface_z(x, y)
-        if z is None:
-            z = _z
-        pts.append(Point3D(x, y, z + lift))
+    for p in _smooth_closed([Point3D(*q) for q in source]):
+        pts.append(Point3D(*_snap_to_shell(p.x, p.y, lift)))
+    return pts
+
+
+def _cap_on_flank(key, lift=0.004):
+    """Re-lift a side-button cap outline onto the curved left flank.
+
+    The extracted caps are stored as *planar* outlines at a constant ``x``
+    (the plane the source OBJ built them on), but the real flank swells
+    outward underneath them, so drawn as-is they read as flat slabs slicing
+    through the shell.  Every point is re-seated at the flank surface for its
+    own ``(y, z)`` -- the mirror of :func:`_cap_on_surface` for the top.
+    """
+    pts = []
+    for p in _smooth_closed([Point3D(*p) for p in _mesh.CAPS[key]]):
+        fx = side_surface_x(p.y, p.z)
+        if fx is None or fx >= 0.0:
+            fx = p.x
+        pts.append(Point3D(fx - lift, p.y, p.z))
     return pts
 
 
@@ -187,34 +273,290 @@ def build_buttons():
                 top_surface_z(hw + 0.018, cy))
     tmax = max(38.0, math.degrees(
         math.acos(min(1.0, max(-1.0, (rim_z - cz) / r)))))
-    tf, tb = min(150.0, tmax + 74.0), tmax
+    tf = tmax + 14.0
+    # The middle-click region is the exposed *band* of the cylinder: forward
+    # along the near face, back along the far one, so the loop closes into a
+    # ribbon instead of a bow-tie.
     wheel_poly = []
-    for x in (-hw, hw):
-        for i in range(15):
-            t = -tf + (tf + tb) * i / 14
-            wheel_poly.append(Point3D(
-                x, cy + r * math.sin(math.radians(t)),
-                cz + r * math.cos(math.radians(t))))
+    for i in range(15):
+        t = -tf + 2 * tf * i / 14
+        wheel_poly.append(Point3D(
+            -hw, cy + r * math.sin(math.radians(t)),
+            cz + r * math.cos(math.radians(t))))
+    for i in range(15):
+        t = tf - 2 * tf * i / 14
+        wheel_poly.append(Point3D(
+            hw, cy + r * math.sin(math.radians(t)),
+            cz + r * math.cos(math.radians(t))))
     buttons["button3"] = ("Middle click", wheel_poly)
 
     # Middle click (button 3) is the wheel itself.  Scroll up / down are
     # wheel *directions*, not separate physical buttons, so they are offered
     # as assignments in the popover rather than drawn as overlapping facets.
 
-    # Physical caps straight from the mesh.
-    buttons["button6"] = ("DPI", [Point3D(*p) for p in _mesh.CAPS["button6"]])
-    buttons["button9"] = ("Button 9", [Point3D(*p) for p in _mesh.CAPS["button9"]])
-    buttons["button4"] = ("Button 4", [Point3D(*p) for p in _mesh.CAPS["button4"]])
-    buttons["button5"] = ("Button 5", [Point3D(*p) for p in _mesh.CAPS["button5"]])
-    buttons["button7"] = ("Button 7 (\u2193)",
-                          [Point3D(*p) for p in _mesh.CAPS["button8"]])
-    buttons["button8"] = ("Button 8 (\u2191)",
-                          [Point3D(*p) for p in _mesh.CAPS["button7"]])
+    # Physical caps straight from the mesh (side buttons re-seated on the
+    # flank so they wrap the shell instead of cutting through it).
+    buttons["button6"] = ("DPI", _smooth_closed(
+        [Point3D(*p) for p in _mesh.CAPS["button6"]]))
+    buttons["button9"] = ("Button 9", _cap_on_flank("button9"))
+    buttons["button4"] = ("Button 4", _cap_on_flank("button4"))
+    buttons["button5"] = ("Button 5", _cap_on_flank("button5"))
+    buttons["button7"] = ("Button 7 (\u2193)", _cap_on_flank("button8"))
+    buttons["button8"] = ("Button 8 (\u2191)", _cap_on_flank("button7"))
 
     return buttons
 
 
-BUTTONS = build_buttons()
+
+
+# ---------------------------------------------------------------------------
+# Honeycomb: a parametric lattice mapped onto the real shell surface
+# ---------------------------------------------------------------------------
+#
+# The extracted ``RIMS`` turned out to be thin slivers (~2 mm x 6 mm) rather
+# than the round openings of the real mouse, so the pattern is generated
+# instead.  Measured off the official 1:1 views (top view: 0.3554 mm/px):
+# the openings are *rounded diamonds* on a staggered lattice whose nearest
+# neighbours sit at 45 deg, 4.9 mm apart -- i.e. a checkerboard of 3.45 mm
+# -- with ~1.8 mm ribs, and the pattern runs from just behind the click caps
+# to the tail, wrapping the crown and down the flanks.
+#
+# The lattice is laid out in ``(u, v)``: ``v`` is the station along the
+# mouse, ``u`` the arc distance along the cross-section away from the crown
+# apex, so the pattern stays uniform where it rolls over the shoulder.  Both
+# are sampled from the real rings, which is what keeps the cells on the
+# surface instead of floating beside it.
+
+_HONEY_CELL = 3.45           # mm, checkerboard node spacing
+_HONEY_HALF = 2.2            # mm, half-diagonal (vertex radius) of one cell
+_HONEY_ROUND = 0.55          # mm, corner radius of one cell
+_HONEY_REAR_Y = 54.5         # mm from the nose: rear field starts behind the caps
+_HONEY_WRAP_Y = 112.0        # mm: by here the field has reached the base rim
+_HONEY_WRAP0 = 0.62          # flank reach at _HONEY_REAR_Y, apex -> base rim
+_HONEY_WRAP1 = 0.94          # flank reach at the tail
+_HONEY_DPI = (0.0, 53.5, 6.2, 8.6)     # DPI housing: centre (x, y), radii (mm)
+_HONEY_BAND = (29.0, 50.0, 9.0, 24.5)  # wheel-side patches: y range, |x| range
+_HONEY_PROFILE = 192         # samples per side, crown apex -> base rim
+_HONEY_RIM_Z = 1.5           # mm: below this a ring point is base, not shell
+
+_MM = _mesh.LENGTH_MM
+_Y0_MM = 63.8                # station of normalised y = 0
+
+
+def _cr_closed(pts, per_seg=6):
+    """Densify a closed polygon of ``(x, z)`` pairs (Catmull-Rom)."""
+    n = len(pts)
+    out = []
+    for i in range(n):
+        p0, p1, p2 = pts[i - 1], pts[i], pts[(i + 1) % n]
+        p3 = pts[(i + 2) % n]
+        for k in range(per_seg):
+            t = k / per_seg
+            t2, t3 = t * t, t * t * t
+            out.append(tuple(
+                0.5 * (2 * p1[c] + (-p0[c] + p2[c]) * t
+                       + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * t2
+                       + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * t3)
+                for c in (0, 1)))
+    return out
+
+
+def _ring_profiles():
+    """Split every ring into two crown-apex -> base-rim profiles.
+
+    Returns ``(ys, pos, neg, len_pos, len_neg)``.  ``pos[i][j]`` is the
+    ``(x, z)`` (mm) at ``j / (_HONEY_PROFILE - 1)`` of the way from the
+    crown apex to the right base rim of ring ``i``; ``neg`` mirrors it on
+    the left.  Both sides of every ring are sampled at the *same* fractions
+    of their own length, so the profiles line up station to station.
+    """
+    ys, pos, neg, lp, ln = [], [], [], [], []
+    for y_norm, ring in _mesh.RINGS:
+        dense = _cr_closed([(x * _MM, z * _MM) for x, z in ring])
+        n = len(dense)
+        segs = [math.dist(dense[i], dense[(i + 1) % n]) for i in range(n)]
+        apex = max(range(n), key=lambda i: dense[i][1])
+        sides = []
+        # Ring points run anticlockwise, so stepping *backwards* from the
+        # apex walks the right flank: keep that one first, to match the
+        # signed-u convention (positive = right).
+        for step in (-1, 1):
+            walk, dist = [], []
+            k, d = apex, 0.0
+            for _ in range(n):
+                walk.append(dense[k])
+                dist.append(d)
+                if step > 0:
+                    d += segs[k]
+                    k = (k + 1) % n
+                else:
+                    k = (k - 1) % n
+                    d += segs[k]
+            # Trim where the shell meets the base plate.  The low rings near
+            # the nose never drop below _HONEY_RIM_Z, so for them there is no
+            # such crossing: trim at the ring's own lowest point instead.
+            # Without that fallback the walk keeps the *whole* closed loop
+            # (crown -> flank -> underside -> flank -> crown), and because
+            # stations are sampled at matching fractions of their own length,
+            # interpolating such a profile against a properly trimmed one
+            # pairs an underside sample with a flank sample -- which pulled
+            # the keycap outlines metres-deep down the flank and, further
+            # back, shrank the profile to a fraction of its real width.
+            cut = min(range(1, len(walk)), key=lambda i: walk[i][1])
+            for i in range(1, cut + 1):
+                if walk[i][1] < _HONEY_RIM_Z:
+                    # Trim to where the shell meets the base plate.
+                    z0, z1 = walk[i - 1][1], walk[i][1]
+                    f = (z0 - _HONEY_RIM_Z) / max(1e-6, z0 - z1)
+                    walk[i] = (walk[i - 1][0] + (walk[i][0] - walk[i - 1][0]) * f,
+                               _HONEY_RIM_Z)
+                    dist[i] = dist[i - 1] + (dist[i] - dist[i - 1]) * f
+                    cut = i
+                    break
+            length = dist[cut]
+            prof = []
+            j = 0
+            for s in range(_HONEY_PROFILE):
+                want = length * s / (_HONEY_PROFILE - 1)
+                while j < cut - 1 and dist[j + 1] < want:
+                    j += 1
+                span = dist[j + 1] - dist[j]
+                f = 0.0 if span <= 0 else (want - dist[j]) / span
+                prof.append((walk[j][0] + (walk[j + 1][0] - walk[j][0]) * f,
+                             walk[j][1] + (walk[j + 1][1] - walk[j][1]) * f))
+            sides.append((prof, length))
+        ys.append(y_norm * _MM + _Y0_MM)
+        pos.append(sides[0][0])
+        neg.append(sides[1][0])
+        lp.append(sides[0][1])
+        ln.append(sides[1][1])
+    return ys, pos, neg, lp, ln
+
+
+_HONEY_YS, _HONEY_POS, _HONEY_NEG, _HONEY_LPOS, _HONEY_LNEG = _ring_profiles()
+
+
+def _ring_span(y_mm):
+    """Index/t of the two rings bracketing station *y_mm*."""
+    ys = _HONEY_YS
+    if y_mm <= ys[0]:
+        return 0, 0.0
+    if y_mm >= ys[-1]:
+        return len(ys) - 2, 1.0
+    for i in range(len(ys) - 1):
+        if ys[i] <= y_mm <= ys[i + 1]:
+            return i, (y_mm - ys[i]) / (ys[i + 1] - ys[i])
+    return len(ys) - 2, 1.0
+
+
+def _surface_pt(y_mm, u_mm):
+    """``(x, z)`` on the shell at station *y_mm*, arc offset *u_mm* (mm).
+
+    *u_mm* is measured from the crown apex; positive rolls down the right
+    flank, negative the left.  Returns ``(x, z, side_length)``.
+    """
+    i, t = _ring_span(y_mm)
+    sides = _HONEY_POS if u_mm >= 0 else _HONEY_NEG
+    lens = _HONEY_LPOS if u_mm >= 0 else _HONEY_LNEG
+    length = lens[i] + (lens[i + 1] - lens[i]) * t
+    frac = min(1.0, abs(u_mm) / length if length else 0.0) * (_HONEY_PROFILE - 1)
+    j = min(_HONEY_PROFILE - 2, int(frac))
+    f = frac - j
+    out = []
+    for c in (0, 1):
+        near = sides[i][j][c] + (sides[i][j + 1][c] - sides[i][j][c]) * f
+        far = sides[i + 1][j][c] + (sides[i + 1][j + 1][c] - sides[i + 1][j][c]) * f
+        out.append(near + (far - near) * t)
+    return out[0], out[1], length
+
+
+def _cell_template():
+    """One cell as a rounded diamond in ``(u, v)`` mm, centred on the origin."""
+    a, r = _HONEY_HALF, _HONEY_ROUND
+    corners = [(a, 0.0), (0.0, a), (-a, 0.0), (0.0, -a)]
+    out = []
+    for k in range(4):
+        cx, cy = corners[k]
+        corners_in = []
+        for other in (corners[k - 1], corners[(k + 1) % 4]):
+            dx, dy = other[0] - cx, other[1] - cy
+            d = math.hypot(dx, dy) or 1.0
+            corners_in.append((dx / d, dy / d))
+        ex, ey = corners_in[0][0] + corners_in[1][0], corners_in[0][1] + corners_in[1][1]
+        ax, ay = cx + ex * r, cy + ey * r          # arc centre
+        t0 = (cx + corners_in[0][0] * r, cy + corners_in[0][1] * r)
+        t1 = (cx + corners_in[1][0] * r, cy + corners_in[1][1] * r)
+        a0 = math.atan2(t0[1] - ay, t0[0] - ax)
+        a1 = math.atan2(t1[1] - ay, t1[0] - ax)
+        da = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi
+        for s in range(4):
+            ang = a0 + da * s / 3
+            out.append((ax + r * math.cos(ang), ay + r * math.sin(ang)))
+    return out
+
+
+_HONEY_TEMPLATE = _cell_template()
+
+
+def _honey_accept(y_mm, u_mm, x_mm, length):
+    """Is a lattice node inside the honeycomb field?
+
+    The node must sit a whole cell radius clear of every edge: a corner that
+    runs past the end of a profile would be clamped onto the base rim and
+    drag the cell out into a sliver (the "fan" at the tail).
+    """
+    if y_mm >= _HONEY_REAR_Y:
+        t = min(1.0, max(0.0, (y_mm - _HONEY_REAR_Y)
+                          / (_HONEY_WRAP_Y - _HONEY_REAR_Y)))
+        reach = (_HONEY_WRAP0 + (_HONEY_WRAP1 - _HONEY_WRAP0) * t) * length
+        if abs(u_mm) + _HONEY_HALF > reach:
+            return False
+        dx, dy, rx, ry = _HONEY_DPI
+        return ((x_mm - dx) / rx) ** 2 + ((y_mm - dy) / ry) ** 2 >= 1.0
+    y0, y1, x0, x1 = _HONEY_BAND
+    return y0 <= y_mm <= y1 and x0 <= abs(x_mm) <= x1
+
+
+def build_honeycomb():
+    """Honeycomb openings as loops on the shell (normalised coordinates)."""
+    cell = _HONEY_CELL
+    loops = []
+    first = int((24.0 - _HONEY_REAR_Y) / cell) - 1
+    last = int((_HONEY_YS[-1] - _HONEY_REAR_Y) / cell) + 1
+    for row in range(first, last + 1):
+        v0 = _HONEY_REAR_Y + row * cell
+        if v0 < 24.0 or v0 > _HONEY_YS[-1]:
+            continue
+        off = 0.0 if row % 2 == 0 else cell
+        for i in range(-20, 21):
+            u0 = off + i * 2 * cell
+            if v0 + _HONEY_HALF > _HONEY_YS[-1] - 0.3:
+                continue
+            x, _z, length = _surface_pt(v0, u0)
+            if v0 >= _HONEY_REAR_Y:
+                # The rear corners sit further back, where the flank is
+                # shorter; cull against the tighter of the two.
+                _x, _z, rear = _surface_pt(v0 + _HONEY_HALF, u0)
+                length = min(length, rear)
+            if not _honey_accept(v0, u0, x, length):
+                continue
+            pts = []
+            for du, dv in _HONEY_TEMPLATE:
+                x, z, _l = _surface_pt(v0 + dv, u0 + du)
+                pts.append(Point3D(x / _MM, (v0 + dv - _Y0_MM) / _MM, z / _MM))
+            cx, cz, _l = _surface_pt(v0, u0)
+            # Outward surface normal, from the profile tangent (the lattice
+            # is far more reliable than a radial guess where the shell rolls
+            # over the tail and the shoulder).
+            xa, za, _l = _surface_pt(v0, u0 + 1.0)
+            xb, zb, _l = _surface_pt(v0, u0 - 1.0)
+            nx, nz = -(za - zb), (xa - xb)
+            d = math.hypot(nx, nz) or 1.0
+            loops.append({"pts": pts,
+                          "center": Point3D(cx / _MM, (v0 - _Y0_MM) / _MM,
+                                            cz / _MM),
+                          "normal": (nx / d, 0.0, nz / d)})
+    return loops
 
 
 # ---------------------------------------------------------------------------
@@ -242,20 +584,22 @@ def _build_wheel():
     cy, cz, r, hw = (_mesh.WHEEL["cy"], _mesh.WHEEL["cz"],
                      _mesh.WHEEL["r"], _mesh.WHEEL["hw"])
     # Exposed arc: t where the wheel top clears the shell beside its slot.
-    # The wheel keeps going past bottom-dead-centre on the front side, so it
-    # dives down toward the nose instead of stopping at the shell gap.
+    # The ends are tucked a little past the rim so they vanish into the shell
+    # slot -- sweeping further (as before) drew the sunken half of the wheel
+    # straight through the body as a big circle.
     rim = max(top_surface_z(-(hw + 0.016), cy),
               top_surface_z(hw + 0.016, cy))
     cos_t = min(1.0, max(-1.0, (rim - cz) / r))
     tmax = max(58.0, math.degrees(math.acos(cos_t)))
-    tf = min(150.0, tmax + 74.0)
-    near = _wheel_arc(-hw, cy, cz, r, -tf, tmax, steps=26)
-    far = _wheel_arc(hw, cy, cz, r, -tf, tmax, steps=26)
-    hub = _wheel_arc(-hw, cy, cz, 0.55 * r, -tf * 0.88, tmax * 0.88,
+    tuck = 14.0
+    tf = tmax + tuck
+    near = _wheel_arc(-hw, cy, cz, r, -tf, tf, steps=26)
+    far = _wheel_arc(hw, cy, cz, r, -tf, tf, steps=26)
+    hub = _wheel_arc(-hw, cy, cz, 0.55 * r, -tf * 0.88, tf * 0.88,
                      steps=20)
     treads = []
     for f in (0.13, 0.30, 0.48, 0.66, 0.85, 1.0):
-        t = -tf + (tf + tmax) * f
+        t = -tf + 2 * tf * f
         tr = math.radians(t)
         dy, dz = r * math.sin(tr), r * math.cos(tr)
         treads.append([Point3D(-hw, cy + dy, cz + dz),
@@ -278,11 +622,10 @@ def build_details():
     # Centre groove between the click buttons, nose -> wheel slot.
     seams.append(_top_line([(0.0, -0.494), (0.0, -0.390)]))
 
-    holes = [[Point3D(*p) for p in rim] for rim in _mesh.RIMS]
-    return {"seams": seams, "holes": holes, "wheel": _build_wheel()}
+    return {"seams": seams, "holes": build_honeycomb(),
+            "wheel": _build_wheel()}
 
 
-DETAILS = build_details()
 
 
 # ---------------------------------------------------------------------------
@@ -468,8 +811,13 @@ def render(cr, w, h, view, *, visible=None, active=frozenset(), hover=None,
     # far side culled).
     cr.set_source_rgba(0.55, 0.65, 0.95, 0.50)
     cr.set_line_width(1.0)
+    cdx, _cdy, cdz = view.camera_dir()
     for hole in DETAILS["holes"]:
-        _stroke_facing(cr, view, hole, closed=True, bias=-0.04)
+        # Whole-cell facing test: a cell straddling the silhouette must not
+        # be torn in half the way a per-edge test would tear it.
+        nx, _ny, nz = hole["normal"]
+        if nx * cdx + nz * cdz > -0.04:
+            _stroke_polyline(cr, view, hole["pts"], closed=True)
 
     # Longitudinals (front-to-back lines; far side + underside culled).
     cr.set_source_rgba(0.30, 0.36, 0.56, 0.50)
@@ -500,8 +848,11 @@ def render(cr, w, h, view, *, visible=None, active=frozenset(), hover=None,
         for pt in pts[1:]:
             cr.line_to(*pt)
         cr.close_path()
+        # Kept light: a heavy fill turns every cap into a flat plate floating
+        # over the shell, and hides the honeycomb the official views show
+        # through the translucent keycaps.
         lit = key == hover or key in active
-        cr.set_source_rgba(0.32, 0.55, 1.0, 0.30 if lit else 0.16)
+        cr.set_source_rgba(0.32, 0.55, 1.0, 0.24 if lit else 0.07)
         cr.fill_preserve()
         cr.set_source_rgba(0.65, 0.80, 1.0, 1.0 if key == hover else 0.95)
         cr.set_line_width(1.8 if key == hover else 1.4)
@@ -587,3 +938,14 @@ def render(cr, w, h, view, *, visible=None, active=frozenset(), hover=None,
 
     cr.restore()
     return {"view": view, "chips": chips, "anchors": anchors}
+
+
+# ---------------------------------------------------------------------------
+# Built once, here, because both builders need everything above them.
+# ---------------------------------------------------------------------------
+
+#: ``{button_key: (label, [Point3D, ...])}`` -- physical outlines of the mouse.
+BUTTONS = build_buttons()
+
+#: ``{"seams": [...], "holes": [...], "wheel": {...}}`` -- surface decoration.
+DETAILS = build_details()
