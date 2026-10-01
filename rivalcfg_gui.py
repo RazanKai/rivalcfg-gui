@@ -5,12 +5,10 @@ import sys
 import os
 import json
 import subprocess
-import threading
-import math
 import gettext
 import locale
 import logging
-import fcntl
+import re
 from logging.handlers import TimedRotatingFileHandler
 
 def _get_locale_dir():
@@ -43,29 +41,13 @@ try:
     import gi
     gi.require_version('Gtk', '3.0')
     from gi.repository import Gtk, Gdk, GLib, GdkPixbuf
-    import cairo
 except ImportError:
     logging.critical("python-gobject is not installed. Install: pacman -S python-gobject")
     print(_("python-gobject is not installed. Install: pacman -S python-gobject"))
     sys.exit(1)
 
-try:
-    from pynput import mouse as pynput_mouse
-    PYNPUT_AVAILABLE = True
-except ImportError:
-    PYNPUT_AVAILABLE = False
-
-try:
-    import evdev
-    EVDEV_AVAILABLE = True
-except ImportError:
-    EVDEV_AVAILABLE = False
-
-try:
-    import Xlib
-    X11_AVAILABLE = True
-except ImportError:
-    X11_AVAILABLE = False
+import device_core
+import widgets
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 FLATPAK_ID = os.environ.get("FLATPAK_ID")
@@ -91,18 +73,11 @@ except FileNotFoundError:
 # Global dictionary holding application state
 app_state = {}
 
-# --- Device capabilities (Rival 3 vs Aerox family) ---
-# rivalcfg CLI flags differ per device family:
-#  Rival 3: --strip-top-color/--strip-middle-color/--strip-bottom-color,
-#           --logo-color, --light-effect (steady/breath/.../disco),
-#           DPI 200-8500
-#  Aerox 5 / Aerox 5 Wireless / Aerox 3 family: --top-color/--middle-color/
-#           --bottom-color, -a/--reactive-color, -e/--rainbow-effect (flag),
-#           -d/--default-lighting, no logo LED.
-#           Aerox 5 Wireless DPI 100-18000, Aerox 3 DPI 200-8500.
-import re as _re
+# --- Device capabilities ---------------------------------------------------
+# Device identity/capabilities now live in device_core (library-first, CLI
+# fallback). The UI only talks to the DeviceManager / DeviceCaps model.
 
-_DEVICE_CAPS_CACHE = {}
+DEVICE_MANAGER = device_core.DeviceManager(help_provider=lambda: _rivalcfg_help_text())
 
 
 def _rivalcfg_help_text():
@@ -119,109 +94,36 @@ def _rivalcfg_help_text():
 
 
 def get_device_caps(force=False):
-    """Detect connected mouse capabilities from `rivalcfg --help`.
+    """DeviceCaps for the active device (or the primary plugged device).
 
-    Returns dict with: dpi_min, dpi_max, lighting_mode ('aerox'|'rival3'),
-    has_logo, color_flags, has_reactive, has_default_lighting,
-    has_rainbow_flag, has_light_effect, has_extra_buttons, device_label.
-    Falls back to Rival 3 defaults when detection fails.
+    Kept as the single UI entry point; delegates to device_core.
     """
-    if not force and "caps" in _DEVICE_CAPS_CACHE:
-        return _DEVICE_CAPS_CACHE["caps"]
-    help_text = _rivalcfg_help_text()
-    caps = {
-        "dpi_min": 200,
-        "dpi_max": 8500,
-        "lighting_mode": "rival3",
-        "has_logo": True,
-        "color_flags": {
-            "z1_hex": "--strip-top-color",
-            "z2_hex": "--strip-middle-color",
-            "z3_hex": "--strip-bottom-color",
-            "z4_hex": "--logo-color",
-        },
-        "has_reactive": False,
-        "has_default_lighting": False,
-        "has_rainbow_flag": False,
-        "has_light_effect": True,
-        "has_extra_buttons": False,
-        "device_label": "",
-    }
-    if not help_text:
-        _DEVICE_CAPS_CACHE["caps"] = caps
-        return caps
-    # DPI range: "from 100 dpi to 18000 dpi"
-    m = _re.search(r"from\s+(\d+)\s*dpi\s+to\s+(\d+)\s*dpi", help_text)
-    if m:
-        try:
-            caps["dpi_min"] = int(m.group(1))
-            caps["dpi_max"] = int(m.group(2))
-        except ValueError:
-            pass
-    # Lighting family
-    if "--top-color" in help_text and "--strip-top-color" not in help_text:
-        caps["lighting_mode"] = "aerox"
-        caps["has_logo"] = "--logo-color" in help_text
-        caps["color_flags"] = {
-            "z1_hex": "--top-color",
-            "z2_hex": "--middle-color",
-            "z3_hex": "--bottom-color",
-        }
-        caps["has_reactive"] = "--reactive-color" in help_text
-        caps["has_default_lighting"] = "--default-lighting" in help_text
-        caps["has_rainbow_flag"] = "--rainbow-effect" in help_text
-        caps["has_light_effect"] = "--light-effect" in help_text
-    else:
-        caps["lighting_mode"] = "rival3"
-        caps["has_light_effect"] = "--light-effect" in help_text
-    # Extra buttons (Aerox 5 Wireless has button7/8/9): parse default mapping
-    if "button7=" in help_text or "button9=" in help_text:
-        caps["has_extra_buttons"] = True
-    # Device label, e.g. "SteelSeries Aerox 5 Wireless (...) Options:"
-    m2 = _re.search(r"(SteelSeries[^\n]*?)\s+Options:", help_text)
-    if m2:
-        caps["device_label"] = m2.group(1).strip()
-    _DEVICE_CAPS_CACHE["caps"] = caps
-    return caps
+    if force:
+        DEVICE_MANAGER.invalidate()
+    return DEVICE_MANAGER.get_caps(refresh=force)
+
+
+def get_primary_device():
+    return DEVICE_MANAGER.primary_device()
 
 
 def is_steelseries_connected(debug_text):
     """True when debug output shows any SteelSeries USB device (1038:xxxx)."""
     if not debug_text:
         return False
-    return bool(_re.search(r"1038:[0-9a-fA-F]{4}", debug_text))
+    return bool(re.search(r"1038:[0-9a-fA-F]{4}", debug_text))
 
 
-def build_buttons_arg(mapping):
-    """Build rivalcfg --buttons arg, including button7-9 on Aerox 5 class."""
-    caps = get_device_caps()
-    m = mapping or {}
-    if caps.get("has_extra_buttons"):
-        return (
-            f"buttons(button1={m.get('button1', 'button1')}; "
-            f"button2={m.get('button2', 'button2')}; "
-            f"button3={m.get('button3', 'button3')}; "
-            f"button4={m.get('button4', 'button4')}; "
-            f"button5={m.get('button5', 'button5')}; "
-            f"button6={m.get('button6', 'dpi')}; "
-            f"button7={m.get('button7', 'disabled')}; "
-            f"button8={m.get('button8', 'disabled')}; "
-            f"button9={m.get('button9', 'disabled')}; "
-            f"scrollup={m.get('scrollup', 'scrollup')}; "
-            f"scrolldown={m.get('scrolldown', 'scrolldown')}; "
-            f"layout=qwerty)"
-        )
-    return (
-        f"buttons(button1={m.get('button1', 'button1')}; "
-        f"button2={m.get('button2', 'button2')}; "
-        f"button3={m.get('button3', 'button3')}; "
-        f"button4={m.get('button4', 'button4')}; "
-        f"button5={m.get('button5', 'button5')}; "
-        f"button6={m.get('button6', 'dpi')}; "
-        f"scrollup={m.get('scrollup', 'scrollup')}; "
-        f"scrolldown={m.get('scrolldown', 'scrolldown')}; "
-        f"layout=qwerty)"
-    )
+def build_buttons_arg(mapping, caps=None):
+    """Build the rivalcfg --buttons argument (single source of truth)."""
+    if caps is None:
+        caps = get_device_caps()
+    return device_core.build_buttons_arg(caps, mapping)
+
+
+def _caps_device_name(caps):
+    return caps.name or _("Mouse connected")
+
 
 SETTINGS_DIR = os.environ.get("XDG_CONFIG_HOME", os.path.expanduser("~/.config"))
 SETTINGS_DIR = os.path.join(SETTINGS_DIR, "rivalcfg-gui")
@@ -234,16 +136,12 @@ DEFAULT_SETTINGS = {
     "accent_color": "#ff7800",
     "language": "en",
     "active_profile": "Default",
-    "macro_enabled": False,
-    "macro_cps": 10,
-    "macro_trigger_key": "f6",
-    "macro_toggle_key": "",
-    "macro_mode": "toggle",
-    "macro_button": "left",
     "hyprland_mouse_sync": False,
     "hyprland_follow_mouse": 1,
-    "hyprland_macro_bind": False,
 }
+
+#: Bumped whenever the on-disk profile/state shape changes.
+PROFILE_SCHEMA = 2
 
 
 def setup_logging():
@@ -294,7 +192,7 @@ def save_settings():
     """Save current settings to JSON file."""
     try:
         os.makedirs(SETTINGS_DIR, exist_ok=True)
-        to_save = {k: v for k, v in app_state["settings"].items() if k != "macro_enabled"}
+        to_save = {k: v for k, v in app_state["settings"].items() if not k.startswith("macro_")}
         with open(SETTINGS_FILE, "w") as f:
             json.dump(to_save, f, indent=4)
     except Exception as e:
@@ -314,40 +212,78 @@ def list_profiles():
             profiles.append(f[:-5])
     return sorted(profiles) if profiles else ["Default"]
 
+def migrate_profile(data):
+    """Validate and migrate a profile dict to the current schema."""
+    return device_core.migrate_profile(data)
+
+
+def _current_zones():
+    caps = get_device_caps()
+    zones = app_state.get("zones")
+    if isinstance(zones, dict) and zones:
+        return dict(zones)
+    # Seed from caps defaults.
+    return {z.key: z.default for z in caps.lighting.zones}
+
+
+def _current_lighting_state():
+    """Lighting state dict consumed by device_core.build_lighting_plan()."""
+    return {
+        "zones": _current_zones(),
+        "reactive": app_state.get("reactive_hex", "off"),
+        "default_lighting": app_state.get("default_lighting"),
+        "rainbow": app_state.get("rainbow_enabled", False),
+        "rainbow_value": app_state.get("rainbow_value"),
+        "light_effect": app_state.get("selected_effect"),
+    }
+
+
+def current_apply_state():
+    """Full apply state consumed by device_core.build_full_plan()."""
+    state = _current_lighting_state()
+    state["dpi"] = app_state.get("dpi_values") or []
+    state["polling"] = app_state.get("polling_hz")
+    state["buttons"] = app_state.get("button_mapping")
+    return state
+
+
 def save_profile(name):
     ensure_profiles_dir()
-    s = app_state.get("settings", {})
+    caps = get_device_caps()
     profile = {
+        "schema": PROFILE_SCHEMA,
         "dpi_values": app_state.get("dpi_values", [800, 1600]),
         "polling_hz": app_state.get("polling_hz", 1000),
-        "z1_hex": app_state.get("z1_hex", "ff6600"),
-        "z2_hex": app_state.get("z2_hex", "ff6600"),
-        "z3_hex": app_state.get("z3_hex", "ff6600"),
-        "z4_hex": app_state.get("z4_hex", "ff6600"),
-        "selected_effect": app_state.get("selected_effect", "steady"),
-        "reactive_hex": app_state.get("reactive_hex", "off"),
-        "rainbow_enabled": app_state.get("rainbow_enabled", False),
-        "default_lighting": app_state.get("default_lighting", "rainbow"),
+        "zones": _current_zones(),
+        "reactive": app_state.get("reactive_hex", "off"),
+        "rainbow": app_state.get("rainbow_enabled", False),
+        "rainbow_value": app_state.get("rainbow_value", ""),
+        "default_lighting": app_state.get("default_lighting", ""),
+        "light_effect": app_state.get("selected_effect", ""),
         "button_mapping": app_state.get("button_mapping", {}),
-        "macro_cps": s.get("macro_cps", 10),
-        "macro_trigger_key": s.get("macro_trigger_key", "f6"),
-        "macro_toggle_key": s.get("macro_toggle_key", ""),
-        "macro_mode": s.get("macro_mode", "toggle"),
-        "macro_button": s.get("macro_button", "left"),
     }
+    if app_state.get("led_brightness") is not None:
+        profile["led_brightness"] = app_state.get("led_brightness")
+    if caps.vendor_id:
+        profile["device_hint"] = {"vid": caps.vendor_id, "pid": caps.product_id}
     path = os.path.join(PROFILES_DIR, f"{name}.json")
     with open(path, "w") as f:
         json.dump(profile, f, indent=4)
     logging.info("Profile saved: %s (dpi=%s, polling=%s)", name,
                  profile["dpi_values"], profile["polling_hz"])
 
+
 def load_profile_data(name):
     ensure_profiles_dir()
     path = os.path.join(PROFILES_DIR, f"{name}.json")
     if not os.path.exists(path):
         return None
-    with open(path, "r") as f:
-        return json.load(f)
+    try:
+        with open(path, "r") as f:
+            return migrate_profile(json.load(f))
+    except Exception as e:
+        logging.warning("Failed to load profile %s: %s", name, e)
+        return None
 
 def delete_profile_file(name):
     path = os.path.join(PROFILES_DIR, f"{name}.json")
@@ -683,53 +619,71 @@ def set_status(status_type, message):
     label.set_text(message)
 
 
-def run_rivalcfg(args, on_done=None):
-    """Run rivalcfg command in a background thread."""
-    def target():
-        GLib.idle_add(set_status, "running", _("Processing..."))
-        try:
-            cmd = [RIVALCFG_BIN]
-            if app_state.get("no_save"):
-                cmd.append("--no-save")
-            cmd.extend(args)
-            logging.info("rivalcfg %s", " ".join(cmd))
-            result = subprocess.run(
-                cmd,
-                capture_output=True,
-                text=True,
-                timeout=10
-            )
-            if result.returncode != 0:
-                err = result.stderr.strip() if result.stderr.strip() else _("Unknown error")
-                logging.error("rivalcfg failed (exit %d): %s", result.returncode, err)
-                GLib.idle_add(set_status, "error", f"✗ {_('Error')}: {err}")
-                if on_done:
-                    GLib.idle_add(on_done, False, err)
-            else:
-                out = result.stdout.strip()
-                GLib.idle_add(set_status, "ok", "✓ " + _("Done"))
-                if on_done:
-                    GLib.idle_add(on_done, True, out)
-        except FileNotFoundError:
-            msg = _("rivalcfg is not installed. Install: pip install rivalcfg")
-            logging.error("rivalcfg binary not found")
-            GLib.idle_add(set_status, "error", f"✗ {_('Error')}: {msg}")
-            if on_done:
-                GLib.idle_add(on_done, False, msg)
-        except subprocess.TimeoutExpired:
-            msg = _("Timeout (10s)")
-            logging.error("rivalcfg command timed out: %s", args)
-            GLib.idle_add(set_status, "error", f"✗ {_('Error')}: {msg}")
-            if on_done:
-                GLib.idle_add(on_done, False, msg)
-        except Exception as e:
-            msg = f"{_('Unexpected error')}: {e}"
-            logging.error("Unexpected error in rivalcfg: %s", e, exc_info=True)
-            GLib.idle_add(set_status, "error", f"✗ {_('Error')}: {msg}")
-            if on_done:
-                GLib.idle_add(on_done, False, msg)
+def _status_from_queue(kind, message):
+    """CommandQueue status callback; marshalled onto the GUI thread."""
+    if kind == "running":
+        text = "⏳ " + _("Processing...") + " — " + message
+    elif kind == "ok":
+        text = "✓ " + _("Done") + " — " + message
+    else:
+        text = "✗ " + _("Error") + ": " + message
+    GLib.idle_add(set_status, "running" if kind == "running" else ("ok" if kind == "ok" else "error"), text)
 
-    threading.Thread(target=target, daemon=True).start()
+
+def _run_rivalcfg_sync(args):
+    """Execute one rivalcfg command. Returns ``(ok, output)``.
+
+    Runs on the CommandQueue worker thread; must never call GTK directly.
+    """
+    cmd = [RIVALCFG_BIN]
+    if app_state.get("no_save"):
+        cmd.append("--no-save")
+    cmd.extend(args)
+    logging.info("rivalcfg %s", " ".join(cmd))
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        return False, _("rivalcfg is not installed. Install: pip install rivalcfg")
+    except subprocess.TimeoutExpired:
+        return False, _("Timeout (30s)")
+    except Exception as e:  # pragma: no cover - defensive
+        return False, "%s: %s" % (_("Unexpected error"), e)
+    if result.returncode != 0:
+        err = (result.stderr or "").strip() or _("Unknown error")
+        return False, err
+    return True, (result.stdout or "").strip()
+
+
+def _init_command_queue():
+    if app_state.get("command_queue") is not None:
+        return app_state["command_queue"]
+    q = device_core.CommandQueue(_run_rivalcfg_sync, status_cb=_status_from_queue)
+    app_state["command_queue"] = q
+    return q
+
+
+def _queue_plan(plan):
+    """Enqueue a full ApplyPlan (Phase 1+). One plan == one status update."""
+    return _init_command_queue().enqueue(plan)
+
+
+def _debounce_args(key, args, on_done=None):
+    """Debounced single-command apply (sliders/spins: coalesce ticks)."""
+    plan = device_core.ApplyPlan(device_core.plan_label_for_args(args), [list(args)], on_done=on_done)
+    return _init_command_queue().enqueue_debounced(key, plan)
+
+
+def run_rivalcfg(args, on_done=None):
+    """Compatibility wrapper: queue a single rivalcfg invocation.
+
+    All calls funnel through the CommandQueue so no two subprocesses ever race
+    for the HID device (PLAN.md W6). ``on_done`` is invoked on the GUI thread.
+    """
+    def _done(ok, out):
+        if on_done:
+            GLib.idle_add(on_done, ok, out)
+    _init_command_queue().enqueue_args(list(args), on_done=_done)
+
 
 
 def rgba_to_hex(rgba):
@@ -738,6 +692,43 @@ def rgba_to_hex(rgba):
     g = int(rgba.green * 255)
     b = int(rgba.blue * 255)
     return f"{r:02x}{g:02x}{b:02x}"
+
+
+_NAMED_COLORS = {
+    "white": "ffffff", "silver": "c0c0c0", "gray": "808080", "grey": "808080",
+    "black": "000000", "maroon": "800000", "red": "ff0000", "purple": "800080",
+    "fuchsia": "ff00ff", "green": "008000", "lime": "00ff00", "olive": "808000",
+    "yellow": "ffff00", "navy": "000080", "blue": "0000ff", "teal": "008080",
+    "aqua": "00ffff", "cyan": "00ffff", "magenta": "ff00ff",
+}
+
+
+def color_to_hex(value, default="ff6600"):
+    """Normalise a profile colour (named, #rgb, #rrggbb) to bare hex."""
+    if not value:
+        return default
+    v = str(value).strip().lower()
+    if v in ("off", "disable", "none"):
+        return default
+    if v.startswith("#"):
+        v = v[1:]
+    if re.fullmatch(r"[0-9a-f]{6}", v):
+        return v
+    if re.fullmatch(r"[0-9a-f]{3}", v):
+        return "".join(c * 2 for c in v)
+    return _NAMED_COLORS.get(v, default)
+
+
+def _hex_to_rgb(hexv):
+    """Bare hex -> (r, g, b) floats in 0..1."""
+    try:
+        h = str(hexv).lstrip("#")
+        return int(h[0:2], 16) / 255.0, int(h[2:4], 16) / 255.0, int(h[4:6], 16) / 255.0
+    except Exception:
+        return 0.0, 0.0, 0.0
+
+
+
 
 
 _IS_WAYLAND = bool(os.environ.get("WAYLAND_DISPLAY"))
@@ -749,67 +740,6 @@ if IS_HYPRLAND:
         HYPRLAND_AVAILABLE = True
     except (FileNotFoundError, subprocess.TimeoutExpired):
         HYPRLAND_AVAILABLE = False
-
-
-_WL_KEYCODE_TABLE = {
-    9: 1, 10: 2, 11: 3, 12: 4, 13: 5, 14: 6, 15: 7, 16: 8,
-    17: 9, 18: 10, 19: 11, 20: 12, 21: 13, 22: 14, 23: 15,
-    24: 16, 25: 17, 26: 18, 27: 19, 28: 20, 29: 21, 30: 22,
-    31: 23, 32: 24, 33: 25, 34: 26, 35: 27, 36: 28, 37: 29,
-    38: 30, 39: 31, 40: 32, 41: 33, 42: 34, 43: 35, 44: 36,
-    45: 37, 46: 38, 47: 39, 48: 40, 49: 41, 50: 42, 51: 43,
-    52: 44, 53: 45, 54: 46, 55: 47, 56: 48, 57: 49, 58: 50,
-    59: 51, 60: 52, 61: 53, 62: 54, 63: 55, 64: 56, 65: 57,
-    66: 58, 67: 59, 68: 60, 69: 61, 70: 62, 71: 63, 72: 64,
-    73: 65, 74: 66, 75: 67, 76: 68, 77: 69, 78: 70, 79: 71,
-    80: 72, 81: 73, 82: 74, 83: 75, 84: 76, 85: 77, 86: 78,
-    87: 79, 88: 80, 89: 81, 90: 82, 91: 83, 92: 84, 93: 85,
-    94: 86, 95: 87, 96: 88, 97: 89, 104: 90, 105: 91, 106: 92,
-    107: 93, 108: 94, 109: 95, 110: 96, 111: 97, 112: 98, 113: 99,
-    114: 100, 115: 101, 116: 102, 117: 103, 118: 104, 119: 105,
-    120: 106, 121: 107, 122: 108, 123: 109, 124: 110, 125: 111,
-    126: 112, 127: 113, 128: 114, 129: 115, 130: 116, 131: 117,
-    132: 118, 133: 125, 134: 126, 135: 127, 136: 167, 137: 148,
-    138: 164, 139: 166, 140: 142, 141: 140, 142: 143, 143: 144,
-    144: 145, 145: 146, 146: 163, 147: 107, 148: 109, 149: 110,
-    150: 111, 151: 112, 152: 113, 153: 114, 154: 115, 155: 116,
-    156: 117, 157: 118, 158: 119, 159: 120, 160: 121, 161: 122,
-    162: 123, 163: 124, 164: 191, 165: 192, 166: 193, 167: 194,
-    168: 195, 169: 196, 170: 197, 171: 108, 172: 128, 173: 97,
-    174: 129, 175: 130, 176: 131, 177: 132, 178: 133, 179: 134,
-    180: 135, 181: 136, 182: 137, 183: 138, 184: 139, 185: 140,
-    186: 141, 187: 142, 188: 143, 189: 144, 190: 145, 191: 146,
-    192: 147, 193: 168, 194: 169, 195: 170, 196: 171, 197: 172,
-    198: 173, 199: 174, 200: 175, 201: 176, 202: 177, 203: 178,
-    204: 179, 205: 180, 206: 181, 207: 182, 208: 183, 209: 184,
-    210: 185, 211: 186, 212: 187, 213: 188, 214: 189, 215: 190,
-    216: 198, 217: 199, 218: 200, 219: 201, 220: 202, 221: 203,
-    222: 204, 223: 205, 224: 224, 225: 225, 226: 226, 227: 227,
-    228: 228, 229: 229, 230: 230, 231: 231, 232: 232, 233: 233,
-    234: 234, 235: 235, 236: 236, 237: 237, 238: 238, 239: 239,
-    240: 240, 241: 241, 242: 242, 243: 243, 244: 244, 245: 245,
-    246: 246, 247: 247, 248: 248, 249: 249, 250: 250, 251: 251,
-    252: 252, 253: 253, 254: 254, 255: 255,
-}
-
-
-def _x11_to_linux_keycode(x11_kc):
-    """Convert X11 keycode to Linux input keycode using display min_keycode offset."""
-    if _IS_WAYLAND:
-        return _WL_KEYCODE_TABLE.get(x11_kc, x11_kc)
-    if not X11_AVAILABLE:
-        return x11_kc
-    try:
-        from Xlib import display as xd
-        d = xd.Display()
-        try:
-            min_kc = d.display.info.min_keycode
-            return x11_kc - min_kc
-        finally:
-            d.close()
-    except Exception:
-        pass
-    return x11_kc
 
 
 def _hyprctl_get_mouse_settings():
@@ -874,39 +804,6 @@ def _hyprctl_set_follow_mouse(follow):
         return False
 
 
-def _hyprctl_bind_keybind(key, command, description=""):
-    """Add a Hyprland keybind. Returns True on success."""
-    if not HYPRLAND_AVAILABLE:
-        return False
-    try:
-        bind_str = f"{key}, {command}"
-        if description:
-            bind_str += f", {description}"
-        result = subprocess.run(
-            ["hyprctl", "keyword", "bind", bind_str],
-            capture_output=True, text=True, timeout=5
-        )
-        return result.returncode == 0
-    except Exception as e:
-        logging.error("Failed to bind Hyprland keybind: %s", e)
-        return False
-
-
-def _hyprctl_unbind_keybind(key):
-    """Remove a Hyprland keybind."""
-    if not HYPRLAND_AVAILABLE:
-        return False
-    try:
-        result = subprocess.run(
-            ["hyprctl", "keyword", "unbind", key],
-            capture_output=True, text=True, timeout=5
-        )
-        return result.returncode == 0
-    except Exception as e:
-        logging.error("Failed to unbind Hyprland keybind: %s", e)
-        return False
-
-
 def _hyprctl_sync_mouse_to_rivalcfg(dpi_value):
     """Sync Hyprland mouse DPI/sensitivity with rivalcfg settings."""
     if not HYPRLAND_AVAILABLE:
@@ -915,630 +812,9 @@ def _hyprctl_sync_mouse_to_rivalcfg(dpi_value):
     return _hyprctl_set_mouse_sensitivity(sensitivity)
 
 
-def _find_keyboard_device():
-    """Find the first physical keyboard input device path.
-    Prefers 1.0 (main keyboard) over 1.1 (media keys) interface.
-    """
-    from glob import glob
-    paths = sorted(glob("/dev/input/by-path/*-event-kbd"))
-    if paths:
-        one_point_zero = [p for p in paths if ":1.0-event-kbd" in p]
-        if one_point_zero:
-            return one_point_zero[0]
-        return paths[0]
-    paths = sorted(glob("/dev/input/event*"))
-    for p in paths:
-        try:
-            dev = evdev.InputDevice(p)
-            caps = dev.capabilities()
-            dev.close()
-            if caps.get(evdev.ecodes.EV_KEY):
-                return p
-        except Exception:
-            continue
-    return None
-
-
-def _find_mouse_device():
-    """Find a physical mouse input device path.
-    Prefers standalone mice over keyboard sub-interfaces.
-    """
-    from glob import glob
-    import os
-    paths = sorted(glob("/dev/input/by-path/*-event-mouse"))
-    if paths:
-        seen = set()
-        uniq = []
-        for p in paths:
-            rp = os.path.realpath(p)
-            if rp not in seen:
-                seen.add(rp)
-                uniq.append(p)
-        if uniq:
-            def iface_num(pa):
-                base = pa.replace("-event-mouse", "")
-                parts = base.rsplit(":", 1)
-                if len(parts) > 1:
-                    try:
-                        return int(parts[-1].split(".")[-1])
-                    except (ValueError, IndexError):
-                        return 0
-                return 0
-            uniq.sort(key=iface_num)
-            return uniq[0]
-    paths = sorted(glob("/dev/input/event*"))
-    for p in paths:
-        try:
-            dev = evdev.InputDevice(p)
-            caps = dev.capabilities()
-            dev.close()
-            if evdev.ecodes.EV_KEY in caps:
-                keys = set(caps[evdev.ecodes.EV_KEY])
-                if evdev.ecodes.BTN_LEFT in keys and evdev.ecodes.KEY_A not in keys:
-                    return p
-        except Exception:
-            continue
-    return None
-
-
-class MacroEngine:
-    """Software auto-clicker engine using evdev event-based key detection."""
-
-    def __init__(self):
-        self.click_thread = None
-        self.monitor_thread = None
-        self.running = False
-        self.active = False
-        self._stop_event = threading.Event()
-        self.mouse_ctrl = pynput_mouse.Controller()
-        self._device_path = None
-        self._device = None
-        self._helper_proc = None
-        self._toggle_listener_thread = None
-        self._toggle_mouse_listener = None
-        self._toggle_stop_event = threading.Event()
-
-    def _helper_path(self):
-        helper = os.path.join(SCRIPT_DIR, "evdev_helper")
-        if os.path.exists(helper):
-            return helper
-        if IN_FLATPAK:
-            candidate = "/app/lib/rivalcfg-gui/evdev_helper"
-            if os.path.exists(candidate):
-                return candidate
-        return helper
-
-    def _resolve_keycode(self, trigger_key):
-        if _IS_WAYLAND:
-            return self._resolve_keycode_wayland(trigger_key)
-        from Xlib import display as xd, XK
-        name_map = {
-            "enter": "Return", "tab": "Tab",
-            "backspace": "BackSpace", "delete": "Delete",
-            "insert": "Insert", "menu": "Menu", "pause": "Pause",
-            "print_screen": "Print", "scroll_lock": "Scroll_Lock",
-            "caps_lock": "Caps_Lock", "num_lock": "Num_Lock",
-            "shift": "Shift_L", "ctrl": "Control_L", "alt": "Alt_L",
-            "cmd": "Super_L", "super": "Super_L",
-            "up": "Up", "down": "Down", "left": "Left", "right": "Right",
-            "home": "Home", "end": "End",
-            "page_up": "Page_Up", "page_down": "Page_Down",
-            "escape": "Escape",
-        }
-        name = name_map.get(trigger_key)
-        if not name:
-            name = trigger_key.upper()
-        ks = XK.string_to_keysym(name)
-        if not ks:
-            ks = XK.string_to_keysym(trigger_key)
-        if not ks:
-            return None
-        disp = xd.Display()
-        try:
-            return disp.keysym_to_keycode(ks)
-        finally:
-            disp.close()
-
-    def _resolve_keycode_wayland(self, trigger_key):
-        """Resolve key name to Linux keycode on Wayland using evdev device lookup."""
-        from glob import glob
-        import struct
-        _IOC_NRBITS = 8
-        _IOC_TYPEBITS = 8
-        _IOC_SIZEBITS = 14
-        _IOC_DIRBITS = 2
-        _IOC_NRSHIFT = 0
-        _IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
-        _IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
-        _IOC_DIRSHIFT = _IOC_SIZESHIFT + _IOC_SIZEBITS
-        EVIOCGKEYCODE = (ord('E') << _IOC_DIRSHIFT) | (2 << _IOC_SIZESHIFT) | (0x18 << _IOC_TYPESHIFT) | (4 << _IOC_NRSHIFT)
-        keyname_to_evdev = {
-            "esc": 1, "1": 2, "2": 3, "3": 4, "4": 5, "5": 6,
-            "6": 7, "7": 8, "8": 9, "9": 10, "0": 11, "minus": 12,
-            "equal": 13, "backspace": 14, "tab": 15, "q": 16, "w": 17,
-            "e": 18, "r": 19, "t": 20, "y": 21, "u": 22, "i": 23,
-            "o": 24, "p": 25, "bracketleft": 26, "bracketright": 27,
-            "return": 28, "enter": 28, "ctrl_l": 29, "ctrl": 29,
-            "a": 30, "s": 31, "d": 32, "f": 33, "g": 34, "h": 35,
-            "j": 36, "k": 37, "l": 38, "semicolon": 39, "apostrophe": 40,
-            "grave": 41, "shift_l": 42, "shift": 42, "backslash": 43,
-            "z": 44, "x": 45, "c": 46, "v": 47, "b": 48, "n": 49,
-            "m": 50, "comma": 51, "period": 52, "slash": 53,
-            "shift_r": 54, "kp_multiply": 55, "alt_l": 56, "alt": 56,
-            "space": 57, "caps_lock": 58, "f1": 59, "f2": 60, "f3": 61,
-            "f4": 62, "f5": 63, "f6": 64, "f7": 65, "f8": 66, "f9": 67,
-            "f10": 68, "num_lock": 69, "scroll_lock": 70,
-            "kp_7": 71, "kp_8": 72, "kp_9": 73, "kp_subtract": 74,
-            "kp_4": 75, "kp_5": 76, "kp_6": 77, "kp_add": 78,
-            "kp_1": 79, "kp_2": 80, "kp_3": 81, "kp_0": 82,
-            "kp_decimal": 83, "f11": 87, "f12": 88, "kp_enter": 96,
-            "ctrl_r": 97, "kp_divide": 98, "print": 99, "alt_r": 100,
-            "home": 102, "up": 103, "page_up": 104, "left": 105,
-            "right": 106, "end": 107, "down": 108, "page_down": 109,
-            "insert": 110, "delete": 111, "pause": 119,
-            "super_l": 125, "super_r": 126, "menu": 139,
-        }
-        name = trigger_key.lower()
-        if name in keyname_to_evdev:
-            return keyname_to_evdev[name]
-        try:
-            paths = sorted(glob("/dev/input/by-path/*-event-kbd"))
-            if paths:
-                dev_path = paths[0]
-            else:
-                dev_path = _find_keyboard_device()
-            if not dev_path:
-                return None
-            with open(dev_path, "rb") as fd:
-                buf = bytearray(8)
-                for kc in range(256):
-                    try:
-                        fcntl.ioctl(fd, EVIOCGKEYCODE, buf)
-                        scancode = struct.unpack("=I", bytes(buf[:4]))[0]
-                        if scancode == kc:
-                            return kc
-                    except (OSError, struct.error):
-                        continue
-        except Exception:
-            pass
-        return keyname_to_evdev.get(name)
-
-    def _ensure_device(self):
-        if self._device is not None:
-            return self._device
-        if self._device_path is None:
-            self._device_path = _find_keyboard_device()
-        if self._device_path is None:
-            return None
-        try:
-            self._device = evdev.InputDevice(self._device_path)
-            return self._device
-        except PermissionError:
-            return None
-        except Exception:
-            self._device_path = None
-            return None
-
-    def _close_device(self):
-        if self._helper_proc is not None:
-            try:
-                self._helper_proc.terminate()
-            except Exception:
-                pass
-            self._helper_proc = None
-        if self._device is not None:
-            try:
-                self._device.close()
-            except Exception:
-                pass
-            self._device = None
-
-    def _ensure_helper_setup(self):
-        """Ensure evdev_helper exists and is setuid root. Shows pkexec dialog if needed."""
-        helper_path = self._helper_path()
-        if not os.path.exists(helper_path):
-            logging.error("evdev_helper binary not found")
-            return False
-        if IN_FLATPAK:
-            return True
-        st = os.stat(helper_path)
-        if (st.st_mode & 0o4000) and (st.st_uid == 0):
-            return True
-        logging.info("Helper not setuid, trying pkexec setup...")
-        GLib.idle_add(self._set_status_text, _("Setting up helper (enter password)..."))
-        try:
-            pkexec_cmd = ["flatpak-spawn", "--host", "pkexec"] if IN_FLATPAK else ["pkexec"]
-            proc = subprocess.Popen(
-                pkexec_cmd + ["sh", "-c",
-                 f"chown root:root '{helper_path}' && chmod u+s '{helper_path}'"],
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE
-            )
-            ret = proc.wait(timeout=60)
-            if ret == 0:
-                st = os.stat(helper_path)
-                if (st.st_mode & 0o4000) and (st.st_uid == 0):
-                    logging.info("Helper set up successfully via pkexec")
-                    return True
-            else:
-                err = proc.stderr.read().decode().strip()
-                logging.error(f"pkexec setup failed (exit={ret}): {err}")
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            logging.error("pkexec setup timed out")
-        except Exception as e:
-            logging.error(f"pkexec setup error: {e}")
-        return False
-
-    def _start_helper_monitor(self, dev_path, linux_kc, mode):
-        if not self._ensure_helper_setup():
-            GLib.idle_add(self._set_status_text, _("Helper setup failed"))
-            return
-        helper_path = self._helper_path()
-        proc = None
-        try:
-            logging.info("Launching helper: %s --device %s --keycode %s",
-                         helper_path, dev_path, linux_kc)
-            proc = subprocess.Popen(
-                [helper_path, "--device", dev_path,
-                 "--keycode", str(linux_kc)],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE
-            )
-            self._helper_proc = proc
-            def read_stderr():
-                for line in proc.stderr:
-                    line = line.decode().strip()
-                    if line:
-                        logging.error(f"helper stderr: {line}")
-            threading.Thread(target=read_stderr, daemon=True).start()
-            for line in proc.stdout:
-                if self._stop_event.is_set():
-                    break
-                try:
-                    data = json.loads(line.decode().strip())
-                    if data.get("key") == linux_kc:
-                        if data.get("state") == "down":
-                            if mode == "toggle":
-                                self.active = not self.active
-                            elif mode == "hold":
-                                self.active = True
-                            GLib.idle_add(self._update_status)
-                        elif data.get("state") == "up":
-                            if mode == "hold":
-                                self.active = False
-                                GLib.idle_add(self._update_status)
-                except (json.JSONDecodeError, KeyError):
-                    continue
-        except Exception as e:
-            logging.error(f"evdev helper error: {e}")
-            GLib.idle_add(self._set_status_text, _("Helper error"))
-        finally:
-            if proc is not None:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    proc.wait(timeout=2)
-                except Exception:
-                    pass
-            self._helper_proc = None
-            self._close_device()
-
-    def start(self, cps, trigger_key, mode, button):
-        self.stop()
-        self.running = True
-        self._stop_event.clear()
-
-        btn_map = {"left": pynput_mouse.Button.left,
-                   "right": pynput_mouse.Button.right,
-                   "middle": pynput_mouse.Button.middle}
-        btn = btn_map.get(button, pynput_mouse.Button.left)
-        interval = 1.0 / cps
-        is_mouse_trigger = trigger_key.startswith("mouse_")
-
-        if is_mouse_trigger:
-            if not EVDEV_AVAILABLE:
-                logging.error("evdev not available for mouse trigger monitoring")
-                return
-            mouse_kc_map = {
-                "mouse_left": evdev.ecodes.BTN_LEFT,
-                "mouse_right": evdev.ecodes.BTN_RIGHT,
-                "mouse_middle": evdev.ecodes.BTN_MIDDLE,
-                "mouse_x1": evdev.ecodes.BTN_SIDE,
-                "mouse_x2": evdev.ecodes.BTN_EXTRA,
-            }
-            linux_kc = mouse_kc_map.get(trigger_key)
-            if linux_kc is None:
-                logging.error(f"Unknown mouse trigger key: {trigger_key}")
-                return
-
-            mouse_dev_path = _find_mouse_device()
-            if mouse_dev_path is None:
-                logging.error("No mouse evdev device found")
-                GLib.idle_add(self._set_status_text, _("No mouse device"))
-                return
-
-            # On Wayland the compositor grabs evdev devices; use setuid helper.
-            # On X11 try direct evdev first, fall back to helper on PermissionError.
-            use_helper = bool(os.environ.get('WAYLAND_DISPLAY'))
-            if not use_helper:
-                try:
-                    mouse_dev = evdev.InputDevice(mouse_dev_path)
-                except PermissionError:
-                    use_helper = True
-                except Exception as e:
-                    logging.error(f"Error opening mouse device: {e}")
-                    GLib.idle_add(self._set_status_text, _("Mouse device error"))
-                    return
-
-            if use_helper:
-                self.monitor_thread = threading.Thread(
-                    target=self._start_helper_monitor,
-                    args=(mouse_dev_path, linux_kc, mode), daemon=True
-                )
-                self.monitor_thread.start()
-            else:
-                def monitor_mouse(dev):
-                    try:
-                        import select
-                        poll = select.poll()
-                        poll.register(dev, select.POLLIN)
-                        while not self._stop_event.is_set():
-                            if not poll.poll(100):
-                                continue
-                            for event in dev.read():
-                                if event.type == evdev.ecodes.EV_KEY:
-                                    e = evdev.categorize(event)
-                                    if e.scancode == linux_kc:
-                                        if e.keystate == e.key_down:
-                                            if mode == "toggle":
-                                                self.active = not self.active
-                                            elif mode == "hold":
-                                                self.active = True
-                                            GLib.idle_add(self._update_status)
-                                        elif e.keystate == e.key_up:
-                                            if mode == "hold":
-                                                self.active = False
-                                                GLib.idle_add(self._update_status)
-                    except Exception as e:
-                        logging.error(f"evdev mouse error: {e}")
-                    finally:
-                        try:
-                            dev.close()
-                        except Exception:
-                            pass
-
-                self.monitor_thread = threading.Thread(target=monitor_mouse, args=(mouse_dev,), daemon=True)
-                self.monitor_thread.start()
-        else:
-            if not EVDEV_AVAILABLE:
-                logging.error("evdev not available for keyboard monitoring")
-                return
-            if trigger_key.startswith("kc:"):
-                parts = trigger_key.split(":", 2)
-                linux_kc = int(parts[1])
-            else:
-                x11_kc = self._resolve_keycode(trigger_key)
-                if x11_kc is None:
-                    logging.error(f"Could not resolve keycode for '{trigger_key}'")
-                    return
-                if _IS_WAYLAND:
-                    linux_kc = x11_kc
-                else:
-                    from Xlib import display as xd
-                    d = xd.Display()
-                    try:
-                        min_kc = d.display.info.min_keycode
-                    finally:
-                        d.close()
-                    linux_kc = x11_kc - min_kc
-
-            use_helper = bool(_IS_WAYLAND)
-            if not use_helper:
-                def monitor_direct(dev):
-                    try:
-                        import select
-                        poll = select.poll()
-                        poll.register(dev, select.POLLIN)
-                        while not self._stop_event.is_set():
-                            if not poll.poll(100):
-                                continue
-                            for event in dev.read():
-                                if event.type == evdev.ecodes.EV_KEY:
-                                    e = evdev.categorize(event)
-                                    if e.scancode == linux_kc:
-                                        if e.keystate == e.key_down:
-                                            if mode == "toggle":
-                                                self.active = not self.active
-                                            elif mode == "hold":
-                                                self.active = True
-                                            GLib.idle_add(self._update_status)
-                                        elif e.keystate == e.key_up:
-                                            if mode == "hold":
-                                                self.active = False
-                                                GLib.idle_add(self._update_status)
-                    except Exception as e:
-                        logging.error(f"evdev direct error: {e}")
-                    finally:
-                        self._close_device()
-
-                dev = self._ensure_device()
-                if dev is not None:
-                    self.monitor_thread = threading.Thread(
-                        target=monitor_direct, args=(dev,), daemon=True
-                    )
-                    self.monitor_thread.start()
-                elif self._device_path is not None:
-                    use_helper = True
-                else:
-                    logging.error("No keyboard device found")
-                    GLib.idle_add(self._set_status_text, _("No keyboard device"))
-                    return
-
-            if use_helper:
-                kb_path = _find_keyboard_device()
-                if kb_path is None:
-                    logging.error("No keyboard device for helper")
-                    GLib.idle_add(self._set_status_text, _("No keyboard device"))
-                    return
-                self.monitor_thread = threading.Thread(
-                    target=self._start_helper_monitor,
-                    args=(kb_path, linux_kc, mode), daemon=True
-                )
-                self.monitor_thread.start()
-
-        def click_loop():
-            while not self._stop_event.is_set():
-                if self.active:
-                    self.mouse_ctrl.click(btn)
-                self._stop_event.wait(interval)
-
-        self.click_thread = threading.Thread(target=click_loop, daemon=True)
-        self.click_thread.start()
-
-    def stop(self):
-        self.running = False
-        self.active = False
-        self._stop_event.set()
-        if self._helper_proc is not None:
-            try:
-                self._helper_proc.terminate()
-            except Exception:
-                pass
-            self._helper_proc = None
-        if self.monitor_thread is not None:
-            self.monitor_thread.join(timeout=2)
-            self.monitor_thread = None
-        if self.click_thread is not None:
-            self.click_thread.join(timeout=2)
-            self.click_thread = None
-        self._close_device()
-        GLib.idle_add(self._update_status)
-
-    def _set_status_text(self, text):
-        dot = app_state.get("macro_status_dot")
-        label = app_state.get("macro_status_label")
-        if dot and label:
-            dot.get_style_context().remove_class("status-ok")
-            dot.get_style_context().add_class("status-running")
-            label.set_text(text)
-
-    def _update_status(self):
-        active = self.active
-        dot = app_state.get("macro_status_dot")
-        label = app_state.get("macro_status_label")
-        if dot and label:
-            if active:
-                dot.get_style_context().remove_class("status-running")
-                dot.get_style_context().add_class("status-ok")
-                label.set_text(_("Macro running"))
-            else:
-                dot.get_style_context().remove_class("status-ok")
-                dot.get_style_context().add_class("status-running")
-                label.set_text(_("Macro stopped"))
-
-    def start_toggle_listener(self, toggle_key, callback):
-        self.stop_toggle_listener()
-        if not toggle_key:
-            return
-        self._toggle_stop_event.clear()
-
-        if toggle_key.startswith("kc:"):
-            parts = toggle_key.split(":", 2)
-            kc_part = parts[1]
-            keycodes = [int(kc) for kc in kc_part.split(",")]
-
-            def listen():
-                if not EVDEV_AVAILABLE:
-                    logging.error("evdev not available for toggle listener")
-                    return
-                dev_path = _find_keyboard_device()
-                if dev_path is not None:
-                    try:
-                        dev = evdev.InputDevice(dev_path)
-                    except PermissionError:
-                        dev = None
-                    except Exception:
-                        dev = None
-                    if dev is not None:
-                        import select
-                        poll = select.poll()
-                        poll.register(dev, select.POLLIN)
-                        if len(keycodes) == 1:
-                            kc = keycodes[0]
-                            while not self._toggle_stop_event.is_set():
-                                if not poll.poll(100):
-                                    continue
-                                for event in dev.read():
-                                    if event.type == evdev.ecodes.EV_KEY:
-                                        e = evdev.categorize(event)
-                                        if e.scancode == kc and e.keystate == e.key_down:
-                                            GLib.idle_add(callback)
-                        else:
-                            pressed_set = set()
-                            triggered = False
-                            target = set(keycodes)
-                            while not self._toggle_stop_event.is_set():
-                                if not poll.poll(50):
-                                    continue
-                                for event in dev.read():
-                                    if event.type == evdev.ecodes.EV_KEY:
-                                        e = evdev.categorize(event)
-                                        if e.scancode in keycodes:
-                                            if e.keystate == e.key_down:
-                                                pressed_set.add(e.scancode)
-                                            elif e.keystate == e.key_up:
-                                                pressed_set.discard(e.scancode)
-                                                triggered = False
-                                if pressed_set == target and not triggered:
-                                    triggered = True
-                                    GLib.idle_add(callback)
-                        try:
-                            dev.close()
-                        except Exception:
-                            pass
-                else:
-                    logging.error("No keyboard device for toggle listener")
-
-            self._toggle_listener_thread = threading.Thread(target=listen, daemon=True)
-            self._toggle_listener_thread.start()
-
-        elif toggle_key.startswith("mouse_"):
-            import pynput.mouse as pynput_mouse_global
-            btn_map = {
-                "mouse_left": pynput_mouse_global.Button.left,
-                "mouse_right": pynput_mouse_global.Button.right,
-                "mouse_middle": pynput_mouse_global.Button.middle,
-                "mouse_x1": pynput_mouse_global.Button.button8,
-                "mouse_x2": pynput_mouse_global.Button.button9,
-            }
-            mbtn = btn_map.get(toggle_key)
-            if mbtn:
-                def on_click(x, y, btn_pressed, pressed):
-                    if btn_pressed == mbtn and pressed:
-                        GLib.idle_add(callback)
-                listener = pynput_mouse_global.Listener(on_click=on_click)
-                listener.daemon = True
-                listener.start()
-                self._toggle_mouse_listener = listener
-
-    def stop_toggle_listener(self):
-        self._toggle_stop_event.set()
-        if self._toggle_listener_thread is not None:
-            self._toggle_listener_thread.join(timeout=2)
-            self._toggle_listener_thread = None
-        if hasattr(self, '_toggle_mouse_listener') and self._toggle_mouse_listener is not None:
-            try:
-                self._toggle_mouse_listener.stop()
-            except Exception:
-                pass
-            self._toggle_mouse_listener = None
-
-
 def create_dpi_page():
-    """Create DPI settings page."""
+    """Create DPI settings page (ranges/steps from device caps)."""
+    caps = get_device_caps()
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     page.set_margin_top(24)
     page.set_margin_bottom(24)
@@ -1557,9 +833,13 @@ def create_dpi_page():
     presets_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     card.pack_start(presets_box, False, False, 0)
 
+    dpi_min, dpi_max, dpi_step = caps.dpi_min, caps.dpi_max, caps.dpi_step
+    max_presets = max(1, caps.dpi_max_presets)
+    default_values = [v for v in caps.dpi_default if dpi_min <= v <= dpi_max] or [dpi_min, min(dpi_max, dpi_min * 2)]
+
     app_state["dpi_scales"] = []
     app_state["dpi_labels"] = []
-    app_state["dpi_values"] = [800, 1600]
+    app_state["dpi_values"] = list(default_values)
 
     assets_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "assets")
     trash_pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
@@ -1569,14 +849,17 @@ def create_dpi_page():
     add_btn = Gtk.Button(label="+ " + _("Add DPI"))
     add_btn.set_halign(Gtk.Align.START)
 
-    def on_add_dpi(btn):
-        if len(app_state["dpi_values"]) >= 5:
-            return
-        app_state["dpi_values"].append(800)
-        rebuild_dpi_ui()
+    def _auto_apply_dpi():
         if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
             vals = app_state["dpi_values"]
-            run_rivalcfg(["--sensitivity", ",".join(str(v) for v in vals)])
+            _debounce_args("dpi", ["--sensitivity", ",".join(str(v) for v in vals)])
+
+    def on_add_dpi(btn):
+        if len(app_state["dpi_values"]) >= max_presets:
+            return
+        app_state["dpi_values"].append(default_values[0])
+        rebuild_dpi_ui()
+        _auto_apply_dpi()
 
     add_btn.connect("clicked", on_add_dpi)
     card.pack_start(add_btn, False, False, 0)
@@ -1596,9 +879,7 @@ def create_dpi_page():
                     return
                 del app_state["dpi_values"][idx]
                 rebuild_dpi_ui()
-                if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                    vals = app_state["dpi_values"]
-                    run_rivalcfg(["--sensitivity", ",".join(str(v) for v in vals)])
+                _auto_apply_dpi()
 
             trash_btn = Gtk.Button()
             trash_btn.set_image(Gtk.Image.new_from_pixbuf(trash_pixbuf))
@@ -1612,10 +893,7 @@ def create_dpi_page():
             lbl.set_halign(Gtk.Align.START)
             row.pack_start(lbl, False, False, 0)
 
-            spin_btn = Gtk.SpinButton()
-            caps = get_device_caps()
-            spin_btn.set_range(caps["dpi_min"], caps["dpi_max"])
-            spin_btn.set_increments(100, 100)
+            spin_btn = Gtk.SpinButton.new_with_range(dpi_min, dpi_max, dpi_step)
             spin_btn.set_digits(0)
             spin_btn.set_numeric(True)
             spin_btn.set_max_length(5)
@@ -1626,9 +904,7 @@ def create_dpi_page():
             row.pack_start(spin_btn, False, False, 0)
             app_state["dpi_labels"].append(spin_btn)
 
-            scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL)
-            scale.set_range(caps["dpi_min"], caps["dpi_max"])
-            scale.set_increments(100, 100)
+            scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, dpi_min, dpi_max, dpi_step)
             scale.set_draw_value(False)
             scale.set_digits(0)
             scale.set_value(val)
@@ -1636,31 +912,34 @@ def create_dpi_page():
 
             _updating = [False]
 
+            def _snap(value, step=dpi_step):
+                if step <= 0:
+                    return int(value)
+                return int(round(int(value) / step) * step)
+
             def on_dpi_changed(sc, idx=i, sb=spin_btn, guard=_updating):
                 if guard[0]:
                     return
+                v = _snap(sc.get_value())
                 guard[0] = True
-                v = int(sc.get_value())
+                if int(sc.get_value()) != v:
+                    sc.set_value(v)
                 sb.set_value(v)
                 guard[0] = False
                 app_state["dpi_values"][idx] = v
-                if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                    vals = app_state["dpi_values"]
-                    arg = ",".join(str(val) for val in vals)
-                    run_rivalcfg(["--sensitivity", arg])
+                _auto_apply_dpi()
 
             def on_spin_changed(sb, idx=i, sc=scale, guard=_updating):
                 if guard[0]:
                     return
+                v = _snap(sb.get_value())
                 guard[0] = True
-                v = int(sb.get_value())
+                if int(sb.get_value()) != v:
+                    sb.set_value(v)
                 sc.set_value(v)
                 guard[0] = False
                 app_state["dpi_values"][idx] = v
-                if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                    vals = app_state["dpi_values"]
-                    arg = ",".join(str(val) for val in vals)
-                    run_rivalcfg(["--sensitivity", arg])
+                _auto_apply_dpi()
 
             scale.connect("value-changed", on_dpi_changed)
             spin_btn.connect("value-changed", on_spin_changed)
@@ -1670,7 +949,7 @@ def create_dpi_page():
             presets_box.pack_start(row, False, False, 0)
 
         presets_box.show_all()
-        add_btn.set_visible(len(app_state["dpi_values"]) < 5)
+        add_btn.set_visible(len(app_state["dpi_values"]) < max_presets)
 
     app_state["_rebuild_dpi_ui"] = rebuild_dpi_ui
     rebuild_dpi_ui()
@@ -1696,7 +975,7 @@ def create_dpi_page():
     reset_btn.get_style_context().add_class("reset-btn")
 
     def on_reset_dpi(btn):
-        app_state["dpi_values"] = [800, 1600]
+        app_state["dpi_values"] = list(default_values)
         rebuild_dpi_ui()
 
     reset_btn.connect("clicked", on_reset_dpi)
@@ -1709,6 +988,7 @@ def create_dpi_page():
 
 def create_polling_page():
     """Create Polling Rate page."""
+    caps = get_device_caps()
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     page.set_margin_top(24)
     page.set_margin_bottom(24)
@@ -1724,8 +1004,8 @@ def create_polling_page():
     card.get_style_context().add_class("card")
     page.pack_start(card, True, True, 0)
 
-    rates = [125, 250, 500, 1000]
-    app_state["polling_hz"] = 1000
+    rates = list(caps.polling_choices) or [125, 250, 500, 1000]
+    app_state["polling_hz"] = caps.polling_default
     app_state["polling_radios"] = {}
     group = None
 
@@ -1735,10 +1015,10 @@ def create_polling_page():
         if group is None:
             rb = Gtk.RadioButton(label=_("{} Hz").format(hz))
             group = rb
-            rb.set_active(hz == 1000)
+            rb.set_active(hz == caps.polling_default)
         else:
             rb = Gtk.RadioButton(label=_("{} Hz").format(hz), group=group)
-            rb.set_active(hz == 1000)
+            rb.set_active(hz == caps.polling_default)
 
         app_state["polling_radios"][hz] = rb
 
@@ -1748,14 +1028,15 @@ def create_polling_page():
                 ms = 1000.0 / val
                 app_state["polling_display"].set_text(_("{} Hz → {} ms").format(val, f"{ms:.1f}"))
                 if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                    run_rivalcfg(["--polling-rate", str(val)])
+                    _debounce_args("polling", ["--polling-rate", str(val)])
 
         rb.connect("toggled", on_polling_toggled)
         radio_box.pack_start(rb, False, False, 0)
 
     card.pack_start(radio_box, False, False, 0)
 
-    display = Gtk.Label(label=_("{} Hz → {} ms").format("1000", "1.0"))
+    display = Gtk.Label(label=_("{} Hz → {} ms").format(caps.polling_default,
+                                                        f"{1000.0 / caps.polling_default:.1f}"))
     display.get_style_context().add_class("value-display")
     display.set_halign(Gtk.Align.START)
     card.pack_start(display, False, False, 0)
@@ -1775,11 +1056,15 @@ def create_polling_page():
     return page
 
 
+def _debounce_plan(key, plan):
+    """Debounced multi-command plan (e.g. a full lighting re-apply)."""
+    return _init_command_queue().enqueue_debounced(key, plan)
+
+
 def create_rgb_page():
-    """Create RGB Lighting page (device-aware: Rival 3 vs Aerox family)."""
+    """Create the RGB Lighting page (capability-driven, embedded colour editor)."""
     caps = get_device_caps()
-    is_aerox = caps.get("lighting_mode") == "aerox"
-    color_flags = caps.get("color_flags", {})
+    lighting = caps.lighting
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     page.set_margin_top(24)
     page.set_margin_bottom(24)
@@ -1791,201 +1076,348 @@ def create_rgb_page():
     title.set_halign(Gtk.Align.START)
     page.pack_start(title, False, False, 0)
 
+    columns = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+    page.pack_start(columns, True, True, 0)
+    left = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+    left.set_hexpand(True)
+    columns.pack_start(left, True, True, 0)
+    right = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    right.set_size_request(320, -1)
+    columns.pack_start(right, False, False, 0)
+
     card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     card.get_style_context().add_class("card")
-    page.pack_start(card, True, True, 0)
+    left.pack_start(card, True, True, 0)
 
-    colors_title = Gtk.Label(label=_("COLORS"))
-    colors_title.get_style_context().add_class("card-title")
-    colors_title.set_halign(Gtk.Align.START)
-    card.pack_start(colors_title, False, False, 0)
+    color_buttons = {}
+    color_previews = {}
+    app_state["color_buttons"] = color_buttons
+    app_state["color_previews"] = color_previews
 
-    app_state["z1_hex"] = "ff6600"
-    app_state["z2_hex"] = "ff6600"
-    app_state["z3_hex"] = "ff6600"
-    app_state["z4_hex"] = "ff6600"
-    # Aerox extras
+    # -- Seed zone state from profile defaults ------------------------------
+    zones = {}
+    for zone in lighting.zones:
+        zones[zone.key] = color_to_hex(zone.default, "ff6600")
+    app_state["zones"] = zones
     app_state["reactive_hex"] = "off"
+    app_state["reactive_color_saved"] = app_state.get("reactive_color_saved", "00ff00")
     app_state["rainbow_enabled"] = False
-    app_state["default_lighting"] = "rainbow"
-    app_state["color_buttons"] = {}
-    app_state["color_previews"] = {}
+    app_state["rainbow_value"] = lighting.rainbow_default
+    app_state["default_lighting"] = lighting.default_lighting_default or (
+        "rainbow" if lighting.has_default_lighting else ""
+    )
+    app_state["selected_effect"] = lighting.light_effect_default or "steady"
 
-    def make_color_row(label_text, default_hex, key):
-        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        row.set_margin_top(4)
+    def auto_apply_lighting():
+        if app_state.get("_loading_profile") or not app_state["settings"].get("auto_apply"):
+            return
+        plan = device_core.build_lighting_plan(caps, _current_lighting_state())
+        _debounce_plan("lighting", plan)
 
-        lbl = Gtk.Label(label=label_text)
-        lbl.set_size_request(100, -1)
-        lbl.set_halign(Gtk.Align.START)
-        row.pack_start(lbl, False, False, 0)
+    # -- Embedded colour editor --------------------------------------------
+    editor = widgets.ColorEditor(initial_hex="ff6600", on_changed=lambda h: None)
+    editor_state = {
+        "target": [None],   # ("zone", key) | ("reactive", None) | (None, None)
+        "widgets": {},      # key -> ColorSwatch
+    }
 
-        rgba = Gdk.RGBA()
-        rgba.parse(f"#{default_hex}")
-
-        color_btn = Gtk.ColorButton()
-        color_btn.set_rgba(rgba)
-        color_btn.set_size_request(60, -1)
-        row.pack_start(color_btn, False, False, 0)
-        app_state["color_buttons"][key] = color_btn
-
-        preview = Gtk.DrawingArea()
-        preview.set_size_request(40, 24)
-        preview.get_style_context().add_class("card")
-        row.pack_start(preview, False, False, 0)
-        app_state["color_previews"][key] = preview
-
-        def on_draw(widget, cr):
-            h = app_state.get(key, "000000")
-            if h in ("off", "disable"):
-                r = g = b = 0.15
+    def _apply_editor_color(hexv):
+        kind, key = editor_state["target"]
+        if kind == "zone":
+            zones[key] = hexv
+            sw = editor_state["widgets"].get(key)
+            if sw is not None:
+                sw.set_hex(hexv)
+            strip = app_state.get("_rgb_strip")
+            if strip is not None:
+                strip.queue_draw()
+        elif kind == "reactive":
+            app_state["reactive_color_saved"] = hexv
+            sw = editor_state["widgets"].get("reactive_hex")
+            if sw is not None:
+                sw.set_hex(hexv)
+            if app_state.get("reactive_switch") is not None and app_state["reactive_switch"].get_active():
+                app_state["reactive_hex"] = hexv
             else:
-                try:
-                    r = int(h[0:2], 16) / 255.0
-                    g = int(h[2:4], 16) / 255.0
-                    b = int(h[4:6], 16) / 255.0
-                except Exception:
-                    r = g = b = 0.0
-            cr.set_source_rgb(r, g, b)
-            cr.paint()
+                app_state["reactive_hex"] = "off"
+        else:
+            return
+        auto_apply_lighting()
+
+    editor._on_changed = _apply_editor_color
+
+    def select_target(kind, key, current_hex, label):
+        editor_state["target"] = (kind, key)
+        for k, sw in editor_state["widgets"].items():
+            sw.set_selected(k == key)
+        editor.set_color(current_hex)
+        editor_title.set_text(label)
+
+    def refresh_editor():
+        """Re-sync the editor with the current target after a profile load."""
+        kind, key = editor_state["target"]
+        if kind == "zone":
+            editor.set_color(zones.get(key, "ff6600"))
+        elif kind == "reactive":
+            editor.set_color(app_state.get("reactive_color_saved", "00ff00"))
+
+    app_state["_color_editor_refresh"] = refresh_editor
+
+    editor_title = Gtk.Label(label=_("Pick a colour to edit"))
+    editor_title.get_style_context().add_class("card-title")
+    editor_title.set_halign(Gtk.Align.START)
+    right.pack_start(editor_title, False, False, 0)
+    right.pack_start(editor, False, False, 0)
+
+    # -- Vertical strip preview (below the picker) -------------------------
+    def on_strip_press(widget, event):
+        # Click a segment of the vertical strip preview to select that zone.
+        h = widget.get_allocated_height()
+        if not lighting.zones or h <= 0:
+            return False
+        idx = int(event.y / (h / len(lighting.zones)))
+        idx = max(0, min(len(lighting.zones) - 1, idx))
+        zone = lighting.zones[idx]
+        select_target("zone", zone.key, zones.get(zone.key, "ff6600"), zone.label)
+        return True
+
+    if lighting.zones:
+        strip_label = Gtk.Label(label=_("STRIP PREVIEW (top → bottom)"))
+        strip_label.get_style_context().add_class("card-title")
+        strip_label.set_halign(Gtk.Align.START)
+        strip_label.set_margin_top(10)
+        right.pack_start(strip_label, False, False, 0)
+
+        strip = Gtk.DrawingArea()
+        strip.set_size_request(90, 200)
+        strip.set_halign(Gtk.Align.START)
+        strip.get_style_context().add_class("color-preview")
+        strip.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        strip.connect("button-press-event", on_strip_press)
+
+        def on_strip_draw(widget, cr):
+            w = widget.get_allocated_width()
+            h = widget.get_allocated_height()
+            n = max(1, len(lighting.zones))
+            seg = h / n
+            for i, zone in enumerate(lighting.zones):
+                r, g, b = _hex_to_rgb(zones.get(zone.key, "ff6600"))
+                cr.set_source_rgb(r, g, b)
+                cr.rectangle(0, i * seg, w, seg)
+                cr.fill()
+            cr.set_line_width(1)
+            cr.set_source_rgba(0, 0, 0, 0.55)
+            for i in range(1, n):
+                cr.move_to(0, i * seg)
+                cr.line_to(w, i * seg)
+            cr.stroke()
             return False
 
-        preview.connect("draw", on_draw)
+        strip.connect("draw", on_strip_draw)
+        right.pack_start(strip, False, False, 0)
+        app_state["_rgb_strip"] = strip
 
-        def on_color_set(button):
-            col = button.get_rgba()
-            app_state[key] = rgba_to_hex(col)
-            preview.queue_draw()
-            if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                if key in color_flags:
-                    run_rivalcfg([color_flags[key], app_state[key]])
-                elif key == "reactive_hex" and caps.get("has_reactive"):
-                    run_rivalcfg(["--reactive-color", app_state[key]])
+    # -- Zone colors --------------------------------------------------------
+    if lighting.zones:
+        colors_title = Gtk.Label(label=_("COLORS"))
+        colors_title.get_style_context().add_class("card-title")
+        colors_title.set_halign(Gtk.Align.START)
+        card.pack_start(colors_title, False, False, 0)
 
-        color_btn.connect("color-set", on_color_set)
-        return row
+        color_hint = Gtk.Label(label=_(
+            "Colors look washed out or pink? Set the Dim timer to 0 on the "
+            "Power page before comparing."))
+        color_hint.get_style_context().add_class("setting-desc")
+        color_hint.set_halign(Gtk.Align.START)
+        color_hint.set_line_wrap(True)
+        card.pack_start(color_hint, False, False, 0)
 
-    card.pack_start(make_color_row(_("Z1 - Top Strip"), "ff6600", "z1_hex"), False, False, 0)
-    card.pack_start(make_color_row(_("Z2 - Middle Strip"), "ff6600", "z2_hex"), False, False, 0)
-    card.pack_start(make_color_row(_("Z3 - Bottom Strip"), "ff6600", "z3_hex"), False, False, 0)
-    if caps.get("has_logo"):
-        card.pack_start(make_color_row(_("Z4 - Logo"), "ff6600", "z4_hex"), False, False, 0)
+        def make_zone_row(zone):
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.set_margin_top(4)
 
-    effect_title = Gtk.Label(label=_("EFFECT"))
-    effect_title.get_style_context().add_class("card-title")
-    effect_title.set_halign(Gtk.Align.START)
-    effect_title.set_margin_top(12)
-    card.pack_start(effect_title, False, False, 0)
+            lbl = Gtk.Label(label=zone.label)
+            lbl.set_size_request(160, -1)
+            lbl.set_halign(Gtk.Align.START)
+            row.pack_start(lbl, False, False, 0)
 
-    if is_aerox:
-        # Aerox family: no --light-effect. Uses -e/--rainbow-effect flag,
-        # -a/--reactive-color and -d/--default-lighting.
-        app_state["selected_effect"] = "steady"
-        app_state["effect_radios"] = {}
+            swatch = widgets.ColorSwatch(zones.get(zone.key, "ff6600"), width=64)
+            swatch.connect("clicked", lambda _b, z=zone: select_target(
+                "zone", z.key, zones.get(z.key, "ff6600"), z.label))
+            row.pack_start(swatch, False, False, 0)
+            color_buttons[zone.key] = swatch
+            editor_state["widgets"][zone.key] = swatch
+            return row
 
-        rainbow_check = Gtk.CheckButton(label=_("Rainbow effect"))
-        rainbow_check.set_active(False)
-        card.pack_start(rainbow_check, False, False, 0)
-        app_state["rainbow_check"] = rainbow_check
+        for zone in lighting.zones:
+            card.pack_start(make_zone_row(zone), False, False, 0)
 
-        def on_rainbow_toggled(button):
-            app_state["rainbow_enabled"] = button.get_active()
-            app_state["selected_effect"] = "rainbow" if button.get_active() else "steady"
-            if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                if button.get_active():
-                    run_rivalcfg(["--rainbow-effect"])
-                else:
-                    # Clearing rainbow by re-applying current colors
-                    run_rivalcfg([color_flags.get("z1_hex", "--top-color"), app_state["z1_hex"]])
+    # -- Reactive (standalone) ---------------------------------------------
+    reactive_title = Gtk.Label(label=_("REACTIVE"))
+    reactive_title.get_style_context().add_class("card-title")
+    reactive_title.set_halign(Gtk.Align.START)
+    reactive_title.set_margin_top(12)
+    if lighting.has_reactive:
+        card.pack_start(reactive_title, False, False, 0)
 
-        rainbow_check.connect("toggled", on_rainbow_toggled)
+        reactive_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        reactive_label = Gtk.Label(label=_("Click flash"))
+        reactive_label.set_size_request(160, -1)
+        reactive_label.set_halign(Gtk.Align.START)
+        reactive_row.pack_start(reactive_label, False, False, 0)
 
-        if caps.get("has_reactive"):
-            reactive_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-            reactive_label = Gtk.Label(label=_("Reactive color"))
-            reactive_label.set_size_request(100, -1)
-            reactive_label.set_halign(Gtk.Align.START)
-            reactive_row.pack_start(reactive_label, False, False, 0)
-            reactive_off = Gtk.CheckButton(label=_("Off"))
-            reactive_off.set_active(True)
-            reactive_row.pack_start(reactive_off, False, False, 0)
-            app_state["reactive_off_check"] = reactive_off
+        reactive_swatch = widgets.ColorSwatch(app_state["reactive_color_saved"], width=64)
 
-            def on_reactive_off_toggled(button):
-                if button.get_active():
-                    app_state["reactive_hex"] = "off"
-                else:
-                    # Keep current picker value
-                    btn = app_state["color_buttons"].get("reactive_hex")
-                    if btn is not None:
-                        app_state["reactive_hex"] = rgba_to_hex(btn.get_rgba())
-                if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                    run_rivalcfg(["--reactive-color", app_state["reactive_hex"]])
+        def _select_reactive(_b=None):
+            select_target("reactive", "reactive_hex",
+                          app_state.get("reactive_color_saved", "00ff00"),
+                          _("Click flash color"))
 
-            reactive_off.connect("toggled", on_reactive_off_toggled)
-            card.pack_start(reactive_row, False, False, 0)
-            card.pack_start(make_color_row(_("Reactive"), "00ff00", "reactive_hex"), False, False, 0)
+        reactive_swatch.connect("clicked", _select_reactive)
+        reactive_row.pack_start(reactive_swatch, False, False, 0)
+        color_buttons["reactive_hex"] = reactive_swatch
+        editor_state["widgets"]["reactive_hex"] = reactive_swatch
 
-        if caps.get("has_default_lighting"):
-            dl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-            dl_label = Gtk.Label(label=_("Default lighting"))
-            dl_label.set_size_request(100, -1)
-            dl_label.set_halign(Gtk.Align.START)
-            dl_row.pack_start(dl_label, False, False, 0)
-            dl_combo = Gtk.ComboBoxText()
-            dl_options = ["off", "reactive", "rainbow", "reactive-rainbow"]
-            for opt in dl_options:
-                dl_combo.append_text(opt)
-            dl_combo.set_active(2)
-            dl_row.pack_start(dl_combo, False, False, 0)
-            app_state["default_lighting_combo"] = dl_combo
+        reactive_switch = Gtk.Switch()
+        reactive_switch.set_active(False)
+        reactive_switch.set_valign(Gtk.Align.START)
+        reactive_row.pack_start(reactive_switch, False, False, 0)
+        app_state["reactive_switch"] = reactive_switch
 
-            def on_dl_changed(combo):
-                val = combo.get_active_text()
-                app_state["default_lighting"] = val
-                if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                    run_rivalcfg(["--default-lighting", val])
+        def on_reactive_switch(switch, _param):
+            if switch.get_active():
+                app_state["reactive_hex"] = app_state.get(
+                    "reactive_color_saved") or reactive_swatch.get_hex()
+            else:
+                app_state["reactive_hex"] = "off"
+            app_state["_reactive_on"] = switch.get_active()
+            auto_apply_lighting()
 
-            dl_combo.connect("changed", on_dl_changed)
-            card.pack_start(dl_row, False, False, 0)
-    else:
-        effects = [
-            (_("Steady"), "steady"),
-            (_("Breath"), "breath"),
-            (_("Breath (Slow)"), "breath-slow"),
-            (_("Breath (Fast)"), "breath-fast"),
-            (_("Rainbow Shift"), "rainbow-shift"),
-            (_("Rainbow Breath"), "rainbow-breath"),
-            (_("Disco"), "disco"),
+        reactive_switch.connect("notify::active", on_reactive_switch)
+        app_state["_reactive_swatch"] = reactive_swatch
+        app_state["_reactive_on"] = False
+
+        card.pack_start(reactive_row, False, False, 0)
+        react_hint = Gtk.Label(label=_("Click flash happens only when this is on."))
+        react_hint.get_style_context().add_class("setting-desc")
+        react_hint.set_halign(Gtk.Align.START)
+        card.pack_start(react_hint, False, False, 0)
+
+    # -- Wake lighting (default lighting) ----------------------------------
+    if lighting.has_default_lighting:
+        wake_title = Gtk.Label(label=_("ON WAKE"))
+        wake_title.get_style_context().add_class("card-title")
+        wake_title.set_halign(Gtk.Align.START)
+        wake_title.set_margin_top(12)
+        card.pack_start(wake_title, False, False, 0)
+
+        dl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        dl_label = Gtk.Label(label=_("Wake lighting"))
+        dl_label.set_size_request(160, -1)
+        dl_label.set_halign(Gtk.Align.START)
+        dl_row.pack_start(dl_label, False, False, 0)
+        dl_combo = Gtk.ComboBoxText()
+        dl_options = list(lighting.default_lighting_choices) or [
+            "off", "reactive", "rainbow", "reactive-rainbow"
         ]
-        app_state["selected_effect"] = "steady"
+        for opt in dl_options:
+            dl_combo.append_text(opt)
+        if app_state["default_lighting"] in dl_options:
+            dl_combo.set_active(dl_options.index(app_state["default_lighting"]))
+        elif "rainbow" in dl_options:
+            dl_combo.set_active(dl_options.index("rainbow"))
+        dl_row.pack_start(dl_combo, False, False, 0)
+        app_state["default_lighting_combo"] = dl_combo
+
+        def on_dl_changed(combo):
+            app_state["default_lighting"] = combo.get_active_text()
+            auto_apply_lighting()
+
+        dl_combo.connect("changed", on_dl_changed)
+        card.pack_start(dl_row, False, False, 0)
+        wake_hint = Gtk.Label(label=_("Applied when the mouse wakes; it does not change steady colors now."))
+        wake_hint.get_style_context().add_class("setting-desc")
+        wake_hint.set_halign(Gtk.Align.START)
+        card.pack_start(wake_hint, False, False, 0)
+
+    # -- Light effect (Rival 3 class) --------------------------------------
+    if lighting.has_light_effect:
+        effect_title = Gtk.Label(label=_("EFFECT"))
+        effect_title.get_style_context().add_class("card-title")
+        effect_title.set_halign(Gtk.Align.START)
+        effect_title.set_margin_top(12)
+        card.pack_start(effect_title, False, False, 0)
+
+        effect_labels = {
+            "steady": _("Steady"),
+            "breath": _("Breath"),
+            "breath-slow": _("Breath (Slow)"),
+            "breath-fast": _("Breath (Fast)"),
+            "rainbow-shift": _("Rainbow Shift"),
+            "rainbow-breath": _("Rainbow Breath"),
+            "disco": _("Disco"),
+        }
         app_state["effect_radios"] = {}
         eff_group = None
-
         eff_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-
-        for name, value in effects:
+        choices = lighting.light_effect_choices or list(effect_labels)
+        for value in choices:
+            name = effect_labels.get(value, value)
             if eff_group is None:
                 rb = Gtk.RadioButton(label=name)
                 eff_group = rb
-                rb.set_active(value == "steady")
             else:
                 rb = Gtk.RadioButton(label=name, group=eff_group)
-                rb.set_active(value == "steady")
-
+            rb.set_active(value == app_state["selected_effect"])
             app_state["effect_radios"][value] = rb
 
             def on_effect_toggled(button, val=value):
                 if button.get_active():
                     app_state["selected_effect"] = val
-                    if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-                        run_rivalcfg(["--light-effect", val])
+                    auto_apply_lighting()
 
             rb.connect("toggled", on_effect_toggled)
             eff_box.pack_start(rb, False, False, 0)
-
         card.pack_start(eff_box, False, False, 0)
 
+    # -- Rainbow (always sent LAST in the plan) ----------------------------
+    if lighting.has_rainbow:
+        rainbow_title = Gtk.Label(label=_("RAINBOW"))
+        rainbow_title.get_style_context().add_class("card-title")
+        rainbow_title.set_halign(Gtk.Align.START)
+        rainbow_title.set_margin_top(12)
+        card.pack_start(rainbow_title, False, False, 0)
+
+        rainbow_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        rainbow_check = Gtk.CheckButton(label=_("Rainbow effect"))
+        rainbow_check.set_active(False)
+        rainbow_row.pack_start(rainbow_check, False, False, 0)
+        app_state["rainbow_check"] = rainbow_check
+
+        if lighting.rainbow_kind == "choice" and lighting.rainbow_choices:
+            rainbow_combo = Gtk.ComboBoxText()
+            for opt in lighting.rainbow_choices:
+                rainbow_combo.append_text(opt)
+            default = lighting.rainbow_default or lighting.rainbow_choices[0]
+            if default in lighting.rainbow_choices:
+                rainbow_combo.set_active(lighting.rainbow_choices.index(default))
+            rainbow_row.pack_start(rainbow_combo, False, False, 0)
+            app_state["rainbow_combo"] = rainbow_combo
+
+            def on_rainbow_choice(combo):
+                app_state["rainbow_value"] = combo.get_active_text()
+                auto_apply_lighting()
+
+            rainbow_combo.connect("changed", on_rainbow_choice)
+
+        def on_rainbow_toggled(button):
+            app_state["rainbow_enabled"] = button.get_active()
+            auto_apply_lighting()
+
+        rainbow_check.connect("toggled", on_rainbow_toggled)
+        card.pack_start(rainbow_row, False, False, 0)
+
+    # -- Apply --------------------------------------------------------------
     apply_btn = Gtk.Button(label=_("APPLY"))
     apply_btn.get_style_context().add_class("apply-btn")
     apply_btn.set_halign(Gtk.Align.START)
@@ -1993,84 +1425,30 @@ def create_rgb_page():
 
     def on_apply_rgb(btn):
         save_active_profile()
-        caps_now = get_device_caps()
-        flags = caps_now.get("color_flags", {})
-        z1 = app_state["z1_hex"]
-        z2 = app_state["z2_hex"]
-        z3 = app_state["z3_hex"]
-        z4 = app_state["z4_hex"]
-        if caps_now.get("lighting_mode") == "aerox":
-            # Chain: z1 -> z2 -> z3 -> reactive -> rainbow/default-lighting.
-            # Setting a color clears rainbow, so rainbow flag goes last.
-            def after_z1(success, msg):
-                if not success:
-                    return
-                run_rivalcfg([flags.get("z2_hex", "--middle-color"), z2], after_z2)
-
-            def after_z2(success, msg):
-                if not success:
-                    return
-                run_rivalcfg([flags.get("z3_hex", "--bottom-color"), z3], after_z3)
-
-            def after_z3(success, msg):
-                if not success:
-                    return
-                if caps_now.get("has_reactive"):
-                    run_rivalcfg(["--reactive-color", app_state.get("reactive_hex", "off")], after_reactive)
-                else:
-                    after_reactive(True, "")
-
-            def after_reactive(success, msg):
-                if not success:
-                    return
-                if app_state.get("rainbow_enabled"):
-                    run_rivalcfg(["--rainbow-effect"], after_rainbow)
-                else:
-                    after_rainbow(True, "")
-
-            def after_rainbow(success, msg):
-                if not success:
-                    return
-                if caps_now.get("has_default_lighting"):
-                    run_rivalcfg(["--default-lighting", app_state.get("default_lighting", "rainbow")])
-
-            run_rivalcfg([flags.get("z1_hex", "--top-color"), z1], after_z1)
-            return
-        effect = app_state["selected_effect"]
-
-        def after_z1(success, msg):
-            if not success:
-                return
-            run_rivalcfg([flags.get("z2_hex", "--strip-middle-color"), z2], after_z2)
-
-        def after_z2(success, msg):
-            if not success:
-                return
-            run_rivalcfg([flags.get("z3_hex", "--strip-bottom-color"), z3], after_z3)
-
-        def after_z3(success, msg):
-            if not success:
-                return
-            if caps_now.get("has_logo"):
-                run_rivalcfg([flags.get("z4_hex", "--logo-color"), z4], after_z4)
-            else:
-                after_z4(True, "")
-
-        def after_z4(success, msg):
-            if not success:
-                return
-            run_rivalcfg(["--light-effect", effect])
-
-        run_rivalcfg([flags.get("z1_hex", "--strip-top-color"), z1], after_z1)
+        plan = device_core.build_lighting_plan(get_device_caps(), _current_lighting_state())
+        _queue_plan(plan)
 
     apply_btn.connect("clicked", on_apply_rgb)
     card.pack_start(apply_btn, False, False, 0)
 
+    # Select the first zone (or reactive) by default.
+    if lighting.zones:
+        z0 = lighting.zones[0]
+        select_target("zone", z0.key, zones.get(z0.key, "ff6600"), z0.label)
+    elif lighting.has_reactive:
+        _select_reactive()
+
     return page
-
-
 def create_buttons_page():
-    """Create Button Mapping page."""
+    """Button Mapping page (3D wireframe of the mouse + assignment popover)."""
+    import math as _math
+
+    import mouse3d
+
+    caps = get_device_caps()
+    keyboard = caps.button_keyboard
+    multimedia = caps.button_multimedia
+
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     page.set_margin_top(24)
     page.set_margin_bottom(24)
@@ -2082,748 +1460,220 @@ def create_buttons_page():
     title.set_halign(Gtk.Align.START)
     page.pack_start(title, False, False, 0)
 
-    button_options = [
-        ("button1", _("Button 1")),
-        ("button2", _("Button 2")),
-        ("button3", _("Button 3")),
-        ("button4", _("Button 4")),
-        ("button5", _("Button 5")),
-        ("button6", _("Button 6")),
-        ("dpi", _("DPI Cycle")),
-        ("scrollup", _("Scroll Up")),
-        ("scrolldown", _("Scroll Down")),
-        ("disable", _("Disable")),
-    ]
+    # -- State --------------------------------------------------------------
+    app_state.setdefault("button_mapping", {})
+    defaults = {b.key: b.default for b in caps.buttons}
+    for key, value in defaults.items():
+        app_state["button_mapping"].setdefault(key, value)
+    app_state["button_defaults"] = defaults
 
-    defaults = {
-        "button1": "button1",
-        "button2": "button2",
-        "button3": "button3",
-        "button4": "button4",
-        "button5": "button5",
-        "button6": "dpi",
-        "button7": "disabled",
-        "button8": "disabled",
-        "button9": "disabled",
-        "scrollup": "scrollup",
-        "scrolldown": "scrolldown",
-    }
+    device_button_keys = set(caps.button_keys)
+    mouse_targets = sorted(k for k in device_button_keys if k.startswith("button"))
+    scroll_targets = [s for s in ("scrollup", "scrolldown") if s in device_button_keys]
+    has_dpi_action = caps.raw_settings.get("buttons_mapping", {}).get("button_dpi_switch") is not None
+    special_targets = (["dpi"] if has_dpi_action else []) + scroll_targets + ["disabled"]
+    key_items = device_core.keyboard_keys() if keyboard else []
+    mm_items = device_core.MULTIMEDIA_ACTIONS if multimedia else []
 
-    app_state["button_mapping"] = dict(defaults)
-
-    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     card.get_style_context().add_class("card")
     page.pack_start(card, True, True, 0)
 
-    img_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "assets", "rival3.png")
+    # (key, label, yaw, pitch, fill): fill < 1.0 keeps the wireframe from
+    # filling the whole canvas so the fixed-size label chips stay readable.
+    views = [
+        ("3d", _("3D view"), -120.0, 42.0, 0.66),
+        ("top", _("Top view"), 0.0, 90.0, 0.60),
+        ("side", _("Left side"), -90.0, 10.0, 0.70),
+    ]
+    view_state = [views[0]]
 
-    overlay = Gtk.Overlay()
-    overlay.set_hexpand(True)
-    overlay.set_vexpand(True)
+    switcher = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+    switcher.set_halign(Gtk.Align.START)
+    view_buttons = []
+    for key, label, yaw, pitch, fill in views:
+        vb = Gtk.Button(label=label)
+        vb.get_style_context().add_class("nav-btn")
+        if key == view_state[0][0]:
+            vb.get_style_context().add_class("nav-active")
+        switcher.pack_start(vb, False, False, 0)
+        view_buttons.append((vb, key, label, yaw, pitch, fill))
+    card.pack_start(switcher, False, False, 0)
 
-    if os.path.exists(img_path):
-        pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(img_path, 400, 400, True)
-        image_widget = Gtk.Image.new_from_pixbuf(pixbuf)
-        image_widget.set_halign(Gtk.Align.CENTER)
-        image_widget.set_valign(Gtk.Align.CENTER)
-        overlay.add(image_widget)
-    else:
-        fallback = Gtk.Label(label=_("rival3.png not found."))
-        overlay.add(fallback)
+    drawing = Gtk.DrawingArea()
+    drawing.set_hexpand(True)
+    drawing.set_vexpand(True)
+    drawing.set_size_request(-1, 420)
+    drawing.get_style_context().add_class("color-preview")
+    drawing.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+    card.pack_start(drawing, True, True, 0)
 
-    lines_area = Gtk.DrawingArea()
-    lines_area.set_hexpand(True)
-    lines_area.set_vexpand(True)
-    lines_area.set_halign(Gtk.Align.FILL)
-    lines_area.set_valign(Gtk.Align.FILL)
-    lines_area.set_app_paintable(True)
+    geom = {"view": None, "chips": {}}
 
-    box_hit_areas = {}
+    def _chip_text(key, label):
+        assigned = app_state["button_mapping"].get(key, "")
+        return "%s: %s" % (label, device_core.action_label(assigned))
 
-    def draw_lines(widget, cr):
+    def on_draw(widget, cr):
         w = widget.get_allocated_width()
         h = widget.get_allocated_height()
 
-        cr.set_source_rgba(0, 0, 0, 0)
-        cr.paint()
-
-        img_w = 400
-        img_h = 400
-        img_x = (w - img_w) / 2
-        img_y = (h - img_h) / 2
-
-        btn_positions = {
-            "button1": (img_x + 156, img_y + 125),
-            "button2": (img_x + 244, img_y + 125),
-            "button3": (img_x + 200, img_y + 123),
-            "button4": (img_x + 144, img_y + 231),
-            "button5": (img_x + 144, img_y + 194),
-            "button6": (img_x + 200, img_y + 175),
-            "scrollup": (img_x + 200, img_y + 113),
-            "scrolldown": (img_x + 200, img_y + 138),
-        }
-
-        btn_display_names = {
-            "button1": _("Left Click"),
-            "button2": _("Right Click"),
-            "button3": _("Middle"),
-            "button4": _("Back"),
-            "button5": _("Forward"),
-            "button6": _("DPI"),
-            "scrollup": _("Scroll Up"),
-            "scrolldown": _("Scroll Down"),
-        }
-
-        lw = 130
-        lh = 24
-
-        # Middle - mouse'un tam üst ortasında
-        lx_middle = img_x + 200 - lw // 2
-        ly_middle = img_y - 10
-
-        # Scroll Up - Middle'nin solunda, hafif aşağıda
-        lx_scrollup = lx_middle - 150
-        ly_scrollup = ly_middle + 38
-
-        # Scroll Down - Middle'nin sağında, hafif aşağıda
-        lx_scrolldown = lx_middle + 150
-        ly_scrolldown = ly_middle + 70
-
-        # Her kutunun x pozisyonu
-        label_xs = {
-            "button3": lx_middle,
-            "scrollup": lx_scrollup,
-            "scrolldown": lx_scrolldown,
-            "button1": img_x - lw,
-            "button5": img_x - lw,
-            "button4": img_x - lw,
-            "button2": img_x + img_w,
-            "button6": img_x + img_w,
-        }
-
-        label_ys = {
-            "button3": ly_middle,
-            "scrollup": ly_scrollup,
-            "scrolldown": ly_scrolldown,
-            "button1": img_y + 100,
-            "button5": img_y + 165,
-            "button4": img_y + 225,
-            "button6": img_y + 165,
-            "button2": img_y + 100,
-        }
-
-        box_hit_areas.clear()
-
-        # Çizgi hedef kenarları
-        line_targets = {
-            "button3": "bottom",
-            "scrollup": "bottom",
-            "scrolldown": "bottom",
-            "button1": "right",
-            "button5": "right",
-            "button4": "right",
-            "button2": "left",
-            "button6": "left",
-        }
-
-        for btn_name, (bx, by) in btn_positions.items():
-            assigned = app_state["button_mapping"].get(btn_name, btn_name)
-            display_name = btn_display_names[btn_name]
-            label_text = f"{display_name}: {assigned}"
-            ly = label_ys[btn_name]
-            cx = label_xs[btn_name]
-
-            box_hit_areas[btn_name] = (cx, ly, lw, lh)
-
-            # Çizgi hedef noktasını hesapla
-            target = line_targets.get(btn_name, "left")
-            if target == "bottom":
-                tx, ty = cx + lw / 2, ly + lh
-            elif target == "right":
-                tx, ty = cx + lw, ly + lh / 2
-            else:  # left
-                tx, ty = cx, ly + lh / 2
-
-            cr.set_source_rgba(0.4, 0.6, 1.0, 0.7)
-            cr.set_line_width(1.2)
-            cr.move_to(bx, by)
-            cr.line_to(tx, ty)
-            cr.stroke()
-
-            #cr.set_source_rgb(0.4, 0.6, 1.0)
-            #cr.arc(bx, by, 4, 0, 2 * math.pi)
-            #cr.fill()
-
-            cr.set_source_rgba(0.08, 0.14, 0.26, 0.95)
-            cr.rectangle(cx, ly, lw, lh)
-            cr.fill()
-            cr.set_source_rgb(0.25, 0.40, 0.70)
-            cr.set_line_width(1)
-            cr.rectangle(cx, ly, lw, lh)
-            cr.stroke()
-
-            cr.set_source_rgb(1, 1, 1)
-            cr.select_font_face("monospace", 0, 0)
-            cr.set_font_size(9)
-            te = cr.text_extents(label_text)
-            cr.move_to(cx + (lw - te[2]) / 2, ly + lh / 2 + te[3] / 2)
-            cr.show_text(label_text)
-
+        _key, _label, yaw, pitch, fill = view_state[0]
+        view = mouse3d.fit_view(w, h, margin=28, fill=fill,
+                                view=mouse3d.View(yaw=_math.radians(yaw),
+                                                  pitch=_math.radians(pitch)))
+        visible = set(mouse3d.BUTTONS) & (device_button_keys | set(defaults))
+        active = {k for k, v in app_state["button_mapping"].items()
+                  if v not in (None, "", "disabled")}
+        info = mouse3d.render(cr, w, h, view, visible=visible, active=active,
+                              hover=geom.get("hover"), label_fn=_chip_text)
+        geom.update(info)
         return False
 
-    lines_area.connect("draw", draw_lines)
+    drawing.connect("draw", on_draw)
 
-    popover = Gtk.Popover.new(lines_area)
+    # -- Popover ------------------------------------------------------------
+    popover = Gtk.Popover.new(drawing)
     popover.set_modal(True)
+    popover_scroll = Gtk.ScrolledWindow()
+    popover_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+    popover_scroll.set_min_content_height(120)
+    popover_scroll.set_max_content_height(420)
+    popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+    popover_box.set_margin_start(8)
+    popover_box.set_margin_end(8)
+    popover_box.set_margin_top(8)
+    popover_box.set_margin_bottom(8)
+    popover_scroll.add(popover_box)
+    popover.add(popover_scroll)
 
-    popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-    popover_box.set_margin_start(6)
-    popover_box.set_margin_end(6)
-    popover_box.set_margin_top(6)
-    popover_box.set_margin_bottom(6)
+    current_button = [None]
 
-    current_popover_btn = [None]
+    def _section_label(text):
+        lbl = Gtk.Label(label=text)
+        lbl.get_style_context().add_class("card-title")
+        lbl.set_halign(Gtk.Align.START)
+        lbl.set_margin_top(6)
+        return lbl
 
-    def apply_assignment(btn_name, value):
-        app_state["button_mapping"][btn_name] = value
-        app_state["redraw_buttons"]()
+    def _apply(button_key, value):
+        if not button_key:
+            return
+        app_state["button_mapping"][button_key] = value
+        drawing.queue_draw()
         popover.popdown()
         if app_state["settings"].get("auto_apply"):
-            m = app_state["button_mapping"]
-            run_rivalcfg(["--buttons", build_buttons_arg(m)])
+            _debounce_args("buttons", ["--buttons", build_buttons_arg(app_state["button_mapping"], caps)])
 
-    for opt_val, opt_label in button_options:
-        btn = Gtk.Button(label=opt_label)
+    def _add_action_button(text, value, button_key):
+        btn = Gtk.Button(label=text)
         btn.set_halign(Gtk.Align.FILL)
-        btn.connect("clicked", lambda w, o=opt_val: apply_assignment(current_popover_btn[0], o) if current_popover_btn[0] else None)
+        btn.connect("clicked", lambda _w: _apply(button_key, value))
         popover_box.pack_start(btn, False, False, 0)
 
-    popover.add(popover_box)
-    popover_box.show_all()
-    popover.hide()
+    def _build_popover(button_key):
+        for child in popover_box.get_children():
+            popover_box.remove(child)
+        header = Gtk.Label(label=_("%s assignment") % button_key)
+        header.get_style_context().add_class("setting-label")
+        header.set_halign(Gtk.Align.START)
+        popover_box.pack_start(header, False, False, 0)
+
+        popover_box.pack_start(_section_label(_("MOUSE")), False, False, 0)
+        for target in mouse_targets:
+            _add_action_button(device_core.action_label(target), target, button_key)
+        for target in special_targets:
+            _add_action_button(device_core.action_label(target), target, button_key)
+
+        if mm_items:
+            popover_box.pack_start(_section_label(_("MULTIMEDIA")), False, False, 0)
+            for value, label in mm_items:
+                _add_action_button(label, value, button_key)
+
+        if key_items:
+            popover_box.pack_start(_section_label(_("KEYBOARD")), False, False, 0)
+            key_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            key_combo = Gtk.ComboBoxText()
+            for key in key_items:
+                key_combo.append_text(key)
+            key_combo.set_active(0)
+            key_row.pack_start(key_combo, True, True, 0)
+            assign_btn = Gtk.Button(label=_("Assign"))
+            key_row.pack_start(assign_btn, False, False, 0)
+            popover_box.pack_start(key_row, False, False, 0)
+            assign_btn.connect("clicked", lambda _w: _apply(button_key, key_combo.get_active_text()))
+            layout_hint = Gtk.Label(label=_("Layout: qwerty"))
+            layout_hint.get_style_context().add_class("setting-desc")
+            layout_hint.set_halign(Gtk.Align.START)
+            popover_box.pack_start(layout_hint, False, False, 0)
+
+        popover_box.show_all()
+
+    def _hit_test(x, y):
+        view = geom["view"]
+        if view is None:
+            return None
+        # Geometry first (top-most / smallest area wins).
+        best = None
+        best_area = None
+        for key, (label, poly) in mouse3d.BUTTONS.items():
+            if key not in device_button_keys and key not in defaults:
+                continue
+            pts = view.project_many(poly)
+            if mouse3d.point_in_polygon(x, y, pts):
+                area = _poly_area(pts)
+                if best is None or area < best_area:
+                    best, best_area = key, area
+        if best is not None:
+            return best
+        for key, (cx, cy, cw, ch, _label) in geom["chips"].items():
+            if cx <= x <= cx + cw and cy <= y <= cy + ch:
+                return key
+        return None
 
     def on_button_press(widget, event):
-        x, y = event.x, event.y
-        for btn_name, (bx, by, bw, bh) in box_hit_areas.items():
-            if bx <= x <= bx + bw and by <= y <= by + bh:
-                current_popover_btn[0] = btn_name
-                rect = Gdk.Rectangle()
-                rect.x = int(bx)
-                rect.y = int(by)
-                rect.width = int(bw)
-                rect.height = int(bh)
-                popover.set_pointing_to(rect)
-                popover.set_position(Gtk.PositionType.LEFT)
-                popover.popup()
-                return True
-        return False
+        key = _hit_test(event.x, event.y)
+        if not key:
+            return False
+        current_button[0] = key
+        view = geom["view"]
+        poly = mouse3d.BUTTONS[key][1]
+        pts = view.project_many(poly)
+        rect = Gdk.Rectangle()
+        rect.x = int(min(p[0] for p in pts))
+        rect.y = int(min(p[1] for p in pts))
+        rect.width = max(1, int(max(p[0] for p in pts) - rect.x))
+        rect.height = max(1, int(max(p[1] for p in pts) - rect.y))
+        popover.set_pointing_to(rect)
+        popover.set_position(Gtk.PositionType.RIGHT)
+        _build_popover(key)
+        popover.popup()
+        return True
 
-    lines_area.connect("button-press-event", on_button_press)
-    lines_area.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+    drawing.connect("button-press-event", on_button_press)
 
-    overlay.connect("button-press-event", lambda w, e: popover.popdown() if popover.is_visible() else False)
-    overlay.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+    for vb, key, label, yaw, pitch, fill in view_buttons:
+        def _switch(_b, k=key, lbl=label, y=yaw, p=pitch, f=fill):
+            view_state[0] = (k, lbl, y, p, f)
+            for other, _k, _l, _y, _p, _f in view_buttons:
+                other.get_style_context().remove_class("nav-active")
+            _b.get_style_context().add_class("nav-active")
+            drawing.queue_draw()
+        vb.connect("clicked", _switch)
 
-    win = app_state["window"]
-    win.connect("button-press-event", lambda w, e: popover.popdown() if popover.is_visible() else False)
-
-    overlay.add_overlay(lines_area)
-    app_state["redraw_buttons"] = lambda: lines_area.queue_draw()
-
-    card.pack_start(overlay, True, True, 0)
-
-    # --- MACRO SETTINGS ---
-    macro_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
-    macro_card.get_style_context().add_class("card")
-    macro_card.set_margin_top(16)
-
-    macro_title = Gtk.Label(label=_("MACRO / AUTO CLICKER"))
-    macro_title.get_style_context().add_class("card-title")
-    macro_title.set_halign(Gtk.Align.START)
-    macro_card.pack_start(macro_title, False, False, 0)
-
-    enable_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-    enable_row.get_style_context().add_class("setting-row")
-
-    enable_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-    enable_text.set_hexpand(True)
-    enable_label = Gtk.Label(label=_("Macro / Auto Clicker"))
-    enable_label.get_style_context().add_class("setting-label")
-    enable_label.set_halign(Gtk.Align.START)
-    enable_desc = Gtk.Label(label=_("Enable auto-click macro"))
-    enable_desc.get_style_context().add_class("setting-desc")
-    enable_desc.set_halign(Gtk.Align.START)
-    enable_text.pack_start(enable_label, False, False, 0)
-    enable_text.pack_start(enable_desc, False, False, 0)
-    enable_row.pack_start(enable_text, True, True, 0)
-
-    current_toggle = app_state["settings"].get("macro_toggle_key", "")
-    if current_toggle.startswith("kc:"):
-        parts = current_toggle.split(":", 2)
-        kc_part = parts[1]
-        name_part = parts[2] if len(parts) > 2 else ""
-        display_names = {
-            "enter": "Enter", "space": "Space", "tab": "Tab",
-            "backspace": "Backspace", "delete": "Delete",
-            "shift": "Shift", "ctrl": "Ctrl", "alt": "Alt", "cmd": "Super",
-            "up": "↑ Up", "down": "↓ Down", "left": "← Left", "right": "→ Right",
-            "home": "Home", "end": "End", "page_up": "Pg Up", "page_down": "Pg Dn",
-            "caps_lock": "Caps Lock", "num_lock": "Num Lock",
-            "insert": "Insert", "menu": "Menu", "pause": "Pause",
-            "print_screen": "PrtSc", "scroll_lock": "Scroll Lock",
-        }
-        if "+" in name_part:
-            names = name_part.split("+")
-            toggle_init = " + ".join(display_names.get(n, n.upper()) for n in names)
-        elif name_part:
-            toggle_init = display_names.get(name_part, name_part.upper())
-        else:
-            toggle_init = f"Key {kc_part}"
-    elif current_toggle.startswith("mouse_"):
-        toggle_init = current_toggle.replace("mouse_", "Mouse ").title()
-    elif current_toggle:
-        toggle_init = current_toggle.upper()
-    else:
-        toggle_init = _("Not set")
-    toggle_display = Gtk.Label(label=_("Shortcut: ") + toggle_init)
-    toggle_display.get_style_context().add_class("setting-label")
-    toggle_display.set_margin_end(4)
-    enable_row.pack_start(toggle_display, False, False, 0)
-
-    toggle_set_btn = Gtk.Button(label=_("Set Key..."))
-    toggle_set_btn.set_size_request(80, -1)
-    enable_row.pack_start(toggle_set_btn, False, False, 0)
-
-    macro_switch = Gtk.Switch()
-    macro_switch.set_active(app_state["settings"].get("macro_enabled", False))
-    enable_row.pack_start(macro_switch, False, False, 0)
-    macro_card.pack_start(enable_row, False, False, 0)
-
-    macro_settings_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-    macro_settings_box.set_visible(app_state["settings"].get("macro_enabled", False))
-
-    if not EVDEV_AVAILABLE:
-        evdev_warn = Gtk.Label(label=_("evdev module not installed.\nInstall: python-evdev"))
-        evdev_warn.get_style_context().add_class("setting-desc")
-        evdev_warn.set_halign(Gtk.Align.START)
-        evdev_warn.set_margin_bottom(8)
-        macro_settings_box.pack_start(evdev_warn, False, False, 0)
-
-    cps_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    cps_row.get_style_context().add_class("setting-row")
-    cps_label = Gtk.Label(label=_("Clicks per second:"))
-    cps_label.set_halign(Gtk.Align.START)
-    cps_label.set_size_request(150, -1)
-    cps_adjustment = Gtk.Adjustment(
-        value=app_state["settings"].get("macro_cps", 10), lower=1, upper=50, step_increment=1
-    )
-    cps_spin = Gtk.SpinButton(adjustment=cps_adjustment, climb_rate=1, digits=0)
-    cps_spin.set_size_request(80, -1)
-    cps_row.pack_start(cps_label, False, False, 0)
-    cps_row.pack_end(cps_spin, False, False, 0)
-    macro_settings_box.pack_start(cps_row, False, False, 0)
-
-    current_trigger = app_state["settings"].get("macro_trigger_key", "f6")
-    if current_trigger.startswith("kc:"):
-        parts = current_trigger.split(":", 2)
-        key_name = parts[2] if len(parts) > 2 else ""
-        display_init = key_name.upper() if key_name else f"Key {parts[1]}"
-    else:
-        display_init = current_trigger.upper()
-    key_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    key_row.get_style_context().add_class("setting-row")
-    key_label = Gtk.Label(label=_("Trigger key:"))
-    key_label.set_halign(Gtk.Align.START)
-    key_label.set_size_request(150, -1)
-    key_display = Gtk.Label(label=display_init)
-    key_display.set_halign(Gtk.Align.START)
-    key_display.set_size_request(80, -1)
-    key_display.get_style_context().add_class("setting-label")
-    key_set_btn = Gtk.Button(label=_("Set Key..."))
-    key_set_btn.set_size_request(90, -1)
-    key_row.pack_start(key_label, False, False, 0)
-    key_row.pack_end(key_set_btn, False, False, 0)
-    key_row.pack_end(key_display, False, False, 0)
-    macro_settings_box.pack_start(key_row, False, False, 0)
-
-    mode_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    mode_row.get_style_context().add_class("setting-row")
-    mode_label = Gtk.Label(label=_("Mode:"))
-    mode_label.set_halign(Gtk.Align.START)
-    mode_label.set_size_request(150, -1)
-    mode_combo = Gtk.ComboBoxText()
-    mode_combo.append_text(_("Toggle (press once to start/stop)"))
-    mode_combo.append_text(_("Hold (click while held)"))
-    current_mode = app_state["settings"].get("macro_mode", "toggle")
-    mode_combo.set_active(0 if current_mode == "toggle" else 1)
-    mode_row.pack_start(mode_label, False, False, 0)
-    mode_row.pack_end(mode_combo, False, False, 0)
-    macro_settings_box.pack_start(mode_row, False, False, 0)
-
-    btn_macro_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    btn_macro_row.get_style_context().add_class("setting-row")
-    btn_macro_label = Gtk.Label(label=_("Mouse button:"))
-    btn_macro_label.set_halign(Gtk.Align.START)
-    btn_macro_label.set_size_request(150, -1)
-    btn_macro_combo = Gtk.ComboBoxText()
-    btn_macro_combo.append_text(_("Left Click"))
-    btn_macro_combo.append_text(_("Right Click"))
-    btn_macro_combo.append_text(_("Middle Click"))
-    current_btn = app_state["settings"].get("macro_button", "left")
-    btn_values = ["left", "right", "middle"]
-    btn_macro_combo.set_active(btn_values.index(current_btn) if current_btn in btn_values else 0)
-    btn_macro_row.pack_start(btn_macro_label, False, False, 0)
-    btn_macro_row.pack_end(btn_macro_combo, False, False, 0)
-    macro_settings_box.pack_start(btn_macro_row, False, False, 0)
-
-    status_macro_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    status_macro_row.set_margin_top(8)
-    macro_status_dot = Gtk.Label(label="●")
-    macro_status_dot.get_style_context().add_class("status-running")
-    macro_status_label = Gtk.Label(label=_("Macro stopped"))
-    macro_status_label.get_style_context().add_class("setting-desc")
-    status_macro_row.pack_start(macro_status_dot, False, False, 0)
-    status_macro_row.pack_start(macro_status_label, False, False, 0)
-    macro_settings_box.pack_start(status_macro_row, False, False, 0)
-
-    app_state["macro_switch"] = macro_switch
-    app_state["macro_toggle_display"] = toggle_display
-    app_state["macro_toggle_set_btn"] = toggle_set_btn
-    app_state["macro_cps_spin"] = cps_spin
-    app_state["macro_key_display"] = key_display
-    app_state["macro_mode_combo"] = mode_combo
-    app_state["macro_btn_combo"] = btn_macro_combo
-    app_state["macro_settings_box"] = macro_settings_box
-    app_state["macro_status_dot"] = macro_status_dot
-    app_state["macro_status_label"] = macro_status_label
-    app_state["macro_card"] = macro_card
-
-    macro_card.pack_start(macro_settings_box, False, False, 0)
-    card.pack_start(macro_card, False, False, 0)
-
-    def restart_macro():
-        if app_state.get("_loading_profile"):
-            return
-        if not PYNPUT_AVAILABLE:
-            macro_status_label.set_text(_("pynput not installed"))
-            return
-        engine = app_state.get("macro_engine")
-        if engine:
-            engine.stop()
-        enabled = macro_switch.get_active()
-        if enabled:
-            cps = int(cps_spin.get_value())
-            mode_idx = mode_combo.get_active()
-            mode = "toggle" if mode_idx == 0 else "hold"
-            btn_idx = btn_macro_combo.get_active()
-            btn_val = btn_values[btn_idx] if 0 <= btn_idx < len(btn_values) else "left"
-            key_val = app_state["settings"].get("macro_trigger_key", "f6")
-            engine = app_state.get("macro_engine")
-            if engine:
-                engine.start(cps, key_val, mode, btn_val)
-
-    app_state["restart_macro"] = restart_macro
-
-    def on_macro_switch(s, *a):
-        val = macro_switch.get_active()
-        app_state["settings"]["macro_enabled"] = val
-        macro_settings_box.set_visible(val)
-        save_settings()
-        restart_macro()
-
-    macro_switch.connect("notify::active", on_macro_switch)
-
-    def on_cps_changed(s):
-        app_state["settings"]["macro_cps"] = int(s.get_value())
-        save_settings()
-        restart_macro()
-
-    cps_spin.connect("value-changed", on_cps_changed)
-
-    def on_mode_changed(combo):
-        idx = combo.get_active()
-        app_state["settings"]["macro_mode"] = "toggle" if idx == 0 else "hold"
-        save_settings()
-        restart_macro()
-
-    mode_combo.connect("changed", on_mode_changed)
-
-    def on_btn_macro_changed(combo):
-        idx = combo.get_active()
-        if 0 <= idx < len(btn_values):
-            app_state["settings"]["macro_button"] = btn_values[idx]
-            save_settings()
-            restart_macro()
-
-    btn_macro_combo.connect("changed", on_btn_macro_changed)
-
-    def on_set_key(btn):
-        if not PYNPUT_AVAILABLE:
-            return
-        dialog = Gtk.Dialog(
-            title=_("Set Trigger Key"),
-            parent=app_state["window"],
-            flags=Gtk.DialogFlags.MODAL,
-        )
-        dialog.set_default_size(350, 150)
-        box = dialog.get_content_area()
-        box.set_margin_start(16)
-        box.set_margin_end(16)
-        box.set_margin_top(16)
-        box.set_margin_bottom(16)
-        lbl = Gtk.Label(label=_("Press any key or click a mouse button...\nESC to cancel"))
-        lbl.set_halign(Gtk.Align.CENTER)
-        box.pack_start(lbl, True, True, 0)
-        dialog.show_all()
-
-        captured = [None]
-        key_normalize = {
-            "return": "enter", "kp_enter": "enter",
-            "shift_l": "shift", "shift_r": "shift",
-            "control_l": "ctrl", "control_r": "ctrl",
-            "alt_l": "alt", "alt_r": "alt",
-            "super_l": "cmd", "super_r": "cmd",
-        }
-
-        def on_key(widget, event):
-            keyval = event.keyval
-            keyname = Gdk.keyval_name(keyval)
-            hw_kc = event.hardware_keycode
-            linux_kc = _x11_to_linux_keycode(hw_kc)
-            if keyname:
-                kn = keyname.lower()
-                if kn == 'escape':
-                    captured[0] = '__cancel__'
-                else:
-                    normalized = key_normalize.get(kn, kn)
-                    captured[0] = f"kc:{linux_kc}:{normalized}"
-            else:
-                captured[0] = f"kc:{linux_kc}:key_{keyval}"
-            dialog.response(1)
-            return True
-
-        dialog.connect("key-press-event", on_key)
-
-        def on_mouse_btn(widget, event):
-            btn = event.button
-            btn_map = {1: "mouse_left", 2: "mouse_middle", 3: "mouse_right",
-                       8: "mouse_x1", 9: "mouse_x2"}
-            if btn in btn_map:
-                captured[0] = btn_map[btn]
-                dialog.response(1)
-            return True
-
-        dialog.connect("button-press-event", on_mouse_btn)
-
-        dialog.run()
-        dialog.destroy()
-
-        if captured[0] and captured[0] != '__cancel__':
-            key_val = captured[0]
-            app_state["settings"]["macro_trigger_key"] = key_val
-            display_names = {
-                "enter": "Enter", "space": "Space", "tab": "Tab",
-                "backspace": "Backspace", "delete": "Delete",
-                "shift": "Shift", "ctrl": "Ctrl", "alt": "Alt", "cmd": "Super",
-                "up": "↑ Up", "down": "↓ Down", "left": "← Left", "right": "→ Right",
-                "home": "Home", "end": "End", "page_up": "Pg Up", "page_down": "Pg Dn",
-                "caps_lock": "Caps Lock", "num_lock": "Num Lock",
-                "insert": "Insert", "menu": "Menu", "pause": "Pause",
-                "print_screen": "PrtSc", "scroll_lock": "Scroll Lock",
-            }
-            if key_val.startswith("kc:"):
-                parts = key_val.split(":", 2)
-                key_name = parts[2] if len(parts) > 2 else ""
-                if key_name in display_names:
-                    display = display_names[key_name]
-                elif key_name:
-                    display = key_name.upper()
-                else:
-                    display = f"Key {parts[1]}"
-            elif key_val.startswith("mouse_"):
-                btn_name = key_val.replace("mouse_", "").title()
-                display = f"Mouse {btn_name}"
-            elif key_val in display_names:
-                display = display_names[key_val]
-            else:
-                display = key_val.upper()
-            key_display.set_text(display)
-            save_settings()
-            restart_macro()
-
-    key_set_btn.connect("clicked", on_set_key)
-
-    def _toggle_display_text(key_val):
-        display_names = {
-            "enter": "Enter", "space": "Space", "tab": "Tab",
-            "backspace": "Backspace", "delete": "Delete",
-            "shift": "Shift", "ctrl": "Ctrl", "alt": "Alt", "cmd": "Super",
-            "up": "↑ Up", "down": "↓ Down", "left": "← Left", "right": "→ Right",
-            "home": "Home", "end": "End", "page_up": "Pg Up", "page_down": "Pg Dn",
-            "caps_lock": "Caps Lock", "num_lock": "Num Lock",
-            "insert": "Insert", "menu": "Menu", "pause": "Pause",
-            "print_screen": "PrtSc", "scroll_lock": "Scroll Lock",
-        }
-        if key_val.startswith("kc:"):
-            parts = key_val.split(":", 2)
-            kc_part = parts[1]
-            name_part = parts[2] if len(parts) > 2 else ""
-            if "+" in name_part:
-                names = name_part.split("+")
-                display = []
-                for n in names:
-                    display.append(display_names.get(n, n.upper()))
-                return " + ".join(display)
-            elif "+" in kc_part:
-                return _("Chord")
-            if name_part in display_names:
-                return display_names[name_part]
-            elif name_part:
-                return name_part.upper()
-            else:
-                return f"Key {parts[1]}"
-        elif key_val.startswith("mouse_"):
-            btn_name = key_val.replace("mouse_", "").title()
-            return f"Mouse {btn_name}"
-        elif key_val in display_names:
-            return display_names[key_val]
-        else:
-            return key_val.upper()
-
-    def on_set_toggle_key(btn):
-        if not PYNPUT_AVAILABLE:
-            return
-        dialog = Gtk.Dialog(
-            title=_("Set Macro Toggle Key"),
-            parent=app_state["window"],
-            flags=Gtk.DialogFlags.MODAL,
-        )
-        dialog.set_default_size(350, 180)
-        box = dialog.get_content_area()
-        box.set_margin_start(16)
-        box.set_margin_end(16)
-        box.set_margin_top(16)
-        box.set_margin_bottom(16)
-        lbl = Gtk.Label(
-            label=_("Press key combination... (ENTER to confirm, ESC to cancel)")
-        )
-        lbl.set_halign(Gtk.Align.CENTER)
-        box.pack_start(lbl, True, True, 0)
-
-        combo_lbl = Gtk.Label(label=_("(press keys)"))
-        combo_lbl.get_style_context().add_class("setting-label")
-        combo_lbl.set_halign(Gtk.Align.CENTER)
-        box.pack_start(combo_lbl, False, False, 0)
-        dialog.show_all()
-
-        captured = [None]
-        pressed = {}
-        display_names = {
-            "enter": "Enter", "space": "Space", "tab": "Tab",
-            "backspace": "Backspace", "delete": "Delete",
-            "shift": "Shift", "ctrl": "Ctrl", "alt": "Alt", "cmd": "Super",
-            "up": "↑ Up", "down": "↓ Down", "left": "← Left", "right": "→ Right",
-            "home": "Home", "end": "End", "page_up": "Pg Up", "page_down": "Pg Dn",
-            "caps_lock": "Caps Lock", "num_lock": "Num Lock",
-            "insert": "Insert", "menu": "Menu", "pause": "Pause",
-            "print_screen": "PrtSc", "scroll_lock": "Scroll Lock",
-        }
-        key_normalize = {
-            "return": "enter", "kp_enter": "enter",
-            "shift_l": "shift", "shift_r": "shift",
-            "control_l": "ctrl", "control_r": "ctrl",
-            "alt_l": "alt", "alt_r": "alt",
-            "super_l": "cmd", "super_r": "cmd",
-        }
-
-        def update_combo_label():
-            if pressed:
-                names = [display_names.get(n, n.upper())
-                         for kc, n in sorted(pressed.items())]
-                combo_lbl.set_text(" + ".join(names))
-            else:
-                combo_lbl.set_text(_("(press keys)"))
-
-        def on_key_press(widget, event):
-            keyval = event.keyval
-            keyname = Gdk.keyval_name(keyval)
-            hw_kc = event.hardware_keycode
-            linux_kc = _x11_to_linux_keycode(hw_kc)
-            kn = keyname.lower() if keyname else ""
-            if kn == 'escape':
-                captured[0] = '__cancel__'
-                dialog.response(1)
-                return True
-            if kn == 'return' or kn == 'kp_enter':
-                if not pressed:
-                    return True
-                kcs = ",".join(str(k) for k in sorted(pressed.keys()))
-                names = "+".join(pressed[k] for k in sorted(pressed.keys()))
-                captured[0] = f"kc:{kcs}:{names}"
-                dialog.response(1)
-                return True
-            if linux_kc is not None and linux_kc not in pressed:
-                normalized = key_normalize.get(kn, kn)
-                pressed[linux_kc] = normalized
-                update_combo_label()
-            return True
-
-        def on_key_release(widget, event):
-            return True
-
-        dialog.connect("key-press-event", on_key_press)
-        dialog.connect("key-release-event", on_key_release)
-
-        def on_mouse_btn(widget, event):
-            btn = event.button
-            btn_map = {1: "mouse_left", 2: "mouse_middle", 3: "mouse_right",
-                       8: "mouse_x1", 9: "mouse_x2"}
-            if btn in btn_map:
-                captured[0] = btn_map[btn]
-                dialog.response(1)
-            return True
-
-        dialog.connect("button-press-event", on_mouse_btn)
-
-        dialog.run()
-        dialog.destroy()
-
-        if captured[0] and captured[0] != '__cancel__':
-            key_val = captured[0]
-            app_state["settings"]["macro_toggle_key"] = key_val
-            toggle_display.set_text(_("Shortcut: ") + _toggle_display_text(key_val))
-            save_settings()
-
-            engine = app_state.get("macro_engine")
-            if engine:
-                engine.stop_toggle_listener()
-                engine.start_toggle_listener(key_val, on_toggle_macro)
-
-    toggle_set_btn.connect("clicked", on_set_toggle_key)
-
-    def on_toggle_macro():
-        macro_switch.set_active(not macro_switch.get_active())
-    app_state["on_toggle_macro"] = on_toggle_macro
-
-    current_toggle = app_state["settings"].get("macro_toggle_key", "")
-    if current_toggle:
-        engine = app_state.get("macro_engine")
-        if engine:
-            engine.start_toggle_listener(current_toggle, on_toggle_macro)
-
+    # -- Apply / Reset ------------------------------------------------------
     btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
     btn_row.set_halign(Gtk.Align.START)
-    btn_row.set_margin_top(12)
-    btn_row.set_margin_start(12)
-    btn_row.set_margin_bottom(12)
+    btn_row.set_margin_top(8)
 
     apply_btn = Gtk.Button(label=_("APPLY"))
     apply_btn.get_style_context().add_class("apply-btn")
 
     def on_apply_buttons(btn):
         save_active_profile()
-        m = app_state["button_mapping"]
-        run_rivalcfg(["--buttons", build_buttons_arg(m)])
+        plan = device_core.ApplyPlan("Buttons")
+        plan.add(["--buttons", build_buttons_arg(app_state["button_mapping"], get_device_caps())])
+        _queue_plan(plan)
 
     apply_btn.connect("clicked", on_apply_buttons)
     btn_row.pack_start(apply_btn, False, False, 0)
@@ -2832,21 +1682,9 @@ def create_buttons_page():
     reset_btn.get_style_context().add_class("reset-btn")
 
     def on_reset_buttons(btn):
-        defaults = {
-            "button1": "button1",
-            "button2": "button2",
-            "button3": "button3",
-            "button4": "button4",
-            "button5": "button5",
-            "button6": "dpi",
-            "button7": "disabled",
-            "button8": "disabled",
-            "button9": "disabled",
-            "scrollup": "scrollup",
-            "scrolldown": "scrolldown",
-        }
-        app_state["button_mapping"].update(defaults)
-        app_state["redraw_buttons"]()
+        app_state["button_mapping"].clear()
+        app_state["button_mapping"].update(app_state["button_defaults"])
+        drawing.queue_draw()
 
     reset_btn.connect("clicked", on_reset_buttons)
     btn_row.pack_start(reset_btn, False, False, 0)
@@ -2856,7 +1694,16 @@ def create_buttons_page():
     return page
 
 
+def _poly_area(poly):
+    area = 0.0
+    n = len(poly)
+    for i in range(n):
+        x0, y0 = poly[i]
+        x1, y1 = poly[(i + 1) % n]
+        area += x0 * y1 - x1 * y0
+    return abs(area) / 2.0
 def create_devices_page():
+    """Connected Devices page: only the plugged, supported devices (D2)."""
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     page.set_margin_top(24)
     page.set_margin_bottom(24)
@@ -2872,33 +1719,271 @@ def create_devices_page():
     card.get_style_context().add_class("card")
     page.pack_start(card, True, True, 0)
 
-    textview = Gtk.TextView()
-    textview.set_editable(False)
-    textview.set_cursor_visible(False)
-    textview.set_wrap_mode(Gtk.WrapMode.WORD)
-    textview.override_background_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0, 0, 0, 0))
-    textview.override_color(Gtk.StateFlags.NORMAL, Gdk.RGBA(0.8, 0.8, 0.9, 1))
-    app_state["devices_buffer"] = textview.get_buffer()
-    app_state["devices_buffer"].set_text(_("Click refresh to scan..."))
-    scrolled = Gtk.ScrolledWindow()
-    scrolled.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    scrolled.set_min_content_height(200)
-    scrolled.set_vexpand(True)
-    scrolled.add(textview)
-    card.pack_start(scrolled, True, True, 0)
+    info_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    card.pack_start(info_box, False, False, 0)
+
+    footnote = Gtk.Label()
+    footnote.set_markup(
+        "<small>" + _("Only devices currently plugged in are listed. "
+                       "See the rivalcfg device list for every supported model.") + "</small>"
+    )
+    footnote.get_style_context().add_class("setting-desc")
+    footnote.set_halign(Gtk.Align.START)
+    footnote.set_line_wrap(True)
+    card.pack_start(footnote, False, False, 0)
+
+    def refresh():
+        DEVICE_MANAGER.invalidate()
+        for child in info_box.get_children():
+            info_box.remove(child)
+        devices = DEVICE_MANAGER.list_devices()
+        if not devices:
+            empty = Gtk.Label(label=_("No supported mouse plugged in."))
+            empty.get_style_context().add_class("setting-label")
+            empty.set_halign(Gtk.Align.START)
+            info_box.pack_start(empty, False, False, 0)
+            info_box.show_all()
+            return
+        for dev in devices:
+            caps = DEVICE_MANAGER.get_caps(dev, refresh=True)
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+            box.set_margin_bottom(8)
+            name_lbl = Gtk.Label(label="%s" % (dev.name or caps.name))
+            name_lbl.get_style_context().add_class("setting-label")
+            name_lbl.set_halign(Gtk.Align.START)
+            box.pack_start(name_lbl, False, False, 0)
+            details = "%s" % dev.vid_pid
+            if dev.endpoint:
+                details += " · endpoint %d" % dev.endpoint
+            if caps.has_battery:
+                details += " · " + _("battery supported")
+            det_lbl = Gtk.Label(label=details)
+            det_lbl.get_style_context().add_class("setting-desc")
+            det_lbl.set_halign(Gtk.Align.START)
+            box.pack_start(det_lbl, False, False, 0)
+            if caps.has_firmware:
+                fw_btn = Gtk.Button(label=_("Read firmware version"))
+                fw_btn.set_halign(Gtk.Align.START)
+
+                def on_fw(_b, d=dev):
+                    plan = device_core.ApplyPlan("Firmware version")
+                    plan.add(["--firmware-version"])
+                    plan.on_done = lambda ok, out: GLib.idle_add(
+                        set_status,
+                        "ok" if ok else "error",
+                        ("✓ " + out) if ok else ("✗ " + _("Could not read firmware")),
+                    )
+                    _queue_plan(plan)
+
+                fw_btn.connect("clicked", on_fw)
+                box.pack_start(fw_btn, False, False, 0)
+            info_box.pack_start(box, False, False, 0)
+        info_box.show_all()
+
+    app_state["_refresh_devices"] = refresh
 
     refresh_btn = Gtk.Button(label=_("REFRESH"))
     refresh_btn.get_style_context().add_class("apply-btn")
     refresh_btn.set_halign(Gtk.Align.START)
     refresh_btn.set_margin_top(8)
-
-    def on_refresh(btn):
-        def cb(success, msg):
-            GLib.idle_add(app_state["devices_buffer"].set_text, msg)
-        run_rivalcfg(["--list"], cb)
-
-    refresh_btn.connect("clicked", on_refresh)
+    refresh_btn.connect("clicked", lambda _b: refresh())
     card.pack_start(refresh_btn, False, False, 0)
+
+    refresh()
+    return page
+
+
+def create_power_page():
+    """Battery, sleep timer, dim timer (+ brightness where supported)."""
+    caps = get_device_caps()
+    page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+    page.set_margin_top(24)
+    page.set_margin_bottom(24)
+    page.set_margin_start(24)
+    page.set_margin_end(24)
+
+    title = Gtk.Label(label=_("Power"))
+    title.get_style_context().add_class("page-title")
+    title.set_halign(Gtk.Align.START)
+    page.pack_start(title, False, False, 0)
+
+    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+    card.get_style_context().add_class("card")
+    page.pack_start(card, True, True, 0)
+
+    # -- Battery ------------------------------------------------------------
+    if caps.has_battery:
+        batt_title = Gtk.Label(label=_("BATTERY"))
+        batt_title.get_style_context().add_class("card-title")
+        batt_title.set_halign(Gtk.Align.START)
+        card.pack_start(batt_title, False, False, 0)
+
+        batt_label = Gtk.Label(label=_("Unknown"))
+        batt_label.get_style_context().add_class("value-display")
+        batt_label.set_halign(Gtk.Align.START)
+        card.pack_start(batt_label, False, False, 0)
+        charge_label = Gtk.Label(label="")
+        charge_label.get_style_context().add_class("setting-desc")
+        charge_label.set_halign(Gtk.Align.START)
+        card.pack_start(charge_label, False, False, 0)
+
+        def read_battery():
+            plan = device_core.ApplyPlan("Battery level")
+            plan.add(["--battery-level"])
+            plan.on_done = lambda ok, out: GLib.idle_add(_show_battery, ok, out)
+            _queue_plan(plan)
+
+        def _show_battery(ok, out):
+            if not ok or not out:
+                batt_label.set_text(_("Unavailable"))
+                charge_label.set_text(_("Is the mouse turned on?"))
+                return
+            batt_label.set_text(out)
+            charge_label.set_text("")
+
+        batt_status = Gtk.Label(label="")
+        batt_status.get_style_context().add_class("setting-desc")
+        batt_status.set_halign(Gtk.Align.START)
+        card.pack_start(batt_status, False, False, 0)
+
+        def _tick_battery():
+            if not app_state.get("window") or not app_state["window"].get_visible():
+                return True
+            read_battery()
+            return True
+
+        def _start_polling():
+            # Auto-poll the battery: once now, then every 60 s (the mouse is
+            # wireless, so a read costs a command but no user action).
+            read_battery()
+            batt_status.set_text(_("Auto-refreshing every 60 s"))
+            GLib.timeout_add_seconds(60, _tick_battery)
+
+        GLib.idle_add(_start_polling)
+    else:
+        no_batt = Gtk.Label(label=_("This device does not report a battery level."))
+        no_batt.get_style_context().add_class("setting-desc")
+        no_batt.set_halign(Gtk.Align.START)
+        card.pack_start(no_batt, False, False, 0)
+
+    # -- Timers -------------------------------------------------------------
+    def add_timer_rows(setting_key, title_text, desc_text, rng, default):
+        section = Gtk.Label(label=title_text)
+        section.get_style_context().add_class("card-title")
+        section.set_halign(Gtk.Align.START)
+        section.set_margin_top(12)
+        card.pack_start(section, False, False, 0)
+
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        spin = Gtk.SpinButton()
+        spin.set_range(rng[0], rng[1])
+        spin.set_increments(rng[2], max(rng[2] * 5, 1))
+        spin.set_digits(0)
+        spin.set_numeric(True)
+        spin.set_value(default)
+        spin.set_size_request(90, -1)
+        scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL)
+        scale.set_range(rng[0], rng[1])
+        scale.set_increments(rng[2], max(rng[2] * 5, 1))
+        scale.set_draw_value(False)
+        scale.set_value(default)
+        scale.set_hexpand(True)
+        guard = [False]
+        app_state[setting_key] = int(default)
+
+        def push(*_a):
+            app_state[setting_key] = int(spin.get_value())
+            if app_state.get("_loading_profile") or not app_state["settings"].get("auto_apply"):
+                return
+            _debounce_args(setting_key, ["--" + setting_key.replace("_", "-"), str(int(spin.get_value()))])
+
+        def on_scale(sc, sb=spin, g=guard):
+            if g[0]:
+                return
+            g[0] = True
+            sb.set_value(int(sc.get_value()))
+            g[0] = False
+            push()
+
+        def on_spin(sb, sc=scale, g=guard):
+            if g[0]:
+                return
+            g[0] = True
+            sc.set_value(int(sb.get_value()))
+            g[0] = False
+            push()
+
+        scale.connect("value-changed", on_scale)
+        spin.connect("value-changed", on_spin)
+        row.pack_start(spin, False, False, 0)
+        row.pack_start(scale, True, True, 0)
+        card.pack_start(row, False, False, 0)
+        hint = Gtk.Label(label=desc_text)
+        hint.get_style_context().add_class("setting-desc")
+        hint.set_halign(Gtk.Align.START)
+        card.pack_start(hint, False, False, 0)
+        return spin
+
+    if caps.sleep_timer:
+        add_timer_rows("sleep_timer", _("SLEEP TIMER"),
+                       _("Idle time before the mouse sleeps (minutes, 0 = disable)."),
+                       caps.sleep_timer, 5)
+    if caps.dim_timer:
+        add_timer_rows("dim_timer", _("DIM TIMER"),
+                       _("Idle time before LEDs dim (seconds, 0 = disable). "
+                         "Set 0 while comparing colors."),
+                       caps.dim_timer, 30)
+
+    # -- Brightness ---------------------------------------------------------
+    if caps.lighting.has_led_brightness:
+        bright_title = Gtk.Label(label=_("LED BRIGHTNESS"))
+        bright_title.get_style_context().add_class("card-title")
+        bright_title.set_halign(Gtk.Align.START)
+        bright_title.set_margin_top(12)
+        card.pack_start(bright_title, False, False, 0)
+        rng = caps.lighting.led_brightness_range
+        row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL)
+        scale.set_range(rng[0], rng[1])
+        scale.set_increments(rng[2], max(rng[2] * 5, 1))
+        scale.set_draw_value(True)
+        scale.set_value(app_state.get("led_brightness", rng[1]))
+        scale.set_hexpand(True)
+
+        def on_brightness(sc):
+            app_state["led_brightness"] = int(sc.get_value())
+            if app_state.get("_loading_profile") or not app_state["settings"].get("auto_apply"):
+                return
+            _debounce_args("led_brightness", ["--led-brightness", str(int(sc.get_value()))])
+
+        scale.connect("value-changed", on_brightness)
+        row.pack_start(scale, True, True, 0)
+        card.pack_start(row, False, False, 0)
+
+    no_writes = Gtk.Label(label=_("Values apply through the shared command queue."))
+    no_writes.get_style_context().add_class("setting-desc")
+    no_writes.set_halign(Gtk.Align.START)
+    no_writes.set_margin_top(12)
+    card.pack_start(no_writes, False, False, 0)
+
+    # Apply button for timers (explicit apply path).
+    apply_btn = Gtk.Button(label=_("APPLY"))
+    apply_btn.get_style_context().add_class("apply-btn")
+    apply_btn.set_halign(Gtk.Align.START)
+
+    def on_apply_power(_b):
+        save_active_profile()
+        plan = device_core.ApplyPlan("Power")
+        if caps.sleep_timer and app_state.get("sleep_timer") is not None:
+            plan.add(["--sleep-timer", str(int(app_state["sleep_timer"]))])
+        if caps.dim_timer and app_state.get("dim_timer") is not None:
+            plan.add(["--dim-timer", str(int(app_state["dim_timer"]))])
+        if caps.lighting.has_led_brightness and app_state.get("led_brightness") is not None:
+            plan.add(["--led-brightness", str(int(app_state["led_brightness"]))])
+        _queue_plan(plan)
+
+    apply_btn.connect("clicked", on_apply_power)
+    card.pack_start(apply_btn, False, False, 0)
 
     return page
 
@@ -2953,218 +2038,110 @@ def create_about_page():
     return page
 
 
+def _combo_select(combo, value):
+    """Select *value* in a Gtk.ComboBoxText if present."""
+    if combo is None or value is None:
+        return
+    model = combo.get_model()
+    for i, row in enumerate(model):
+        if row[0] == value:
+            combo.set_active(i)
+            return
+
+
 def apply_profile_to_ui(profile):
+    """Load a (migrated) profile into the UI. Never writes to the device."""
+    if not profile:
+        return
+    profile = migrate_profile(profile) or {}
+    caps = get_device_caps()
     app_state["_loading_profile"] = True
+    try:
+        dpi = profile.get("dpi_values")
+        if dpi:
+            app_state["dpi_values"] = [int(v) for v in dpi]
+            if "_rebuild_dpi_ui" in app_state:
+                app_state["_rebuild_dpi_ui"]()
 
-    if "dpi_values" in profile:
-        app_state["dpi_values"] = list(profile["dpi_values"])
-        if "_rebuild_dpi_ui" in app_state:
-            app_state["_rebuild_dpi_ui"]()
+        if "polling_hz" in profile and "polling_radios" in app_state:
+            for hz, rb in app_state["polling_radios"].items():
+                rb.set_active(hz == profile["polling_hz"])
 
-    if "polling_hz" in profile and "polling_radios" in app_state:
-        for hz, rb in app_state["polling_radios"].items():
-            rb.set_active(hz == profile["polling_hz"])
+        zones = profile.get("zones", {})
+        app_state.setdefault("zones", {})
+        for key, val in zones.items():
+            app_state["zones"][key] = color_to_hex(val, app_state["zones"].get(key, "ff6600"))
+            btn = app_state.get("color_buttons", {}).get(key)
+            if btn is not None:
+                btn.set_hex(app_state["zones"][key])
 
-    for key in ["z1_hex", "z2_hex", "z3_hex", "z4_hex", "reactive_hex"]:
-        if key in profile:
-            val = profile[key]
-            # Old Rival-only profiles may lack aerox keys; keep defaults.
-            app_state[key] = val
-            if key in app_state.get("color_buttons", {}) and val not in ("off", "disable"):
-                try:
-                    rgba = Gdk.RGBA()
-                    rgba.parse(f"#{val}")
-                    app_state["color_buttons"][key].set_rgba(rgba)
-                except Exception:
-                    pass
-            if key in app_state.get("color_previews", {}):
-                app_state["color_previews"][key].queue_draw()
+        reactive = profile.get("reactive", "off")
+        reactive_on = reactive not in ("off", "disable", "", None)
+        app_state["reactive_hex"] = color_to_hex(reactive, "00ff00") if reactive_on else "off"
+        if reactive_on:
+            app_state["reactive_color_saved"] = app_state["reactive_hex"]
+        rbtn = app_state.get("color_buttons", {}).get("reactive_hex")
+        if rbtn is not None:
+            rbtn.set_hex(app_state.get("reactive_color_saved", "00ff00"))
+        rswitch = app_state.get("reactive_switch")
+        if rswitch is not None:
+            rswitch.set_active(reactive_on)
 
-    if "rainbow_enabled" in profile:
-        app_state["rainbow_enabled"] = bool(profile["rainbow_enabled"])
-        if "rainbow_check" in app_state:
-            app_state["rainbow_check"].set_active(bool(profile["rainbow_enabled"]))
-        # Keep selected_effect in sync for aerox mode
-        if profile.get("rainbow_enabled"):
-            app_state["selected_effect"] = "rainbow"
-    if "reactive_hex" in profile and "reactive_off_check" in app_state:
-        app_state["reactive_off_check"].set_active(profile["reactive_hex"] in ("off", "disable", ""))
-    if "default_lighting" in profile:
-        app_state["default_lighting"] = profile["default_lighting"]
-        combo = app_state.get("default_lighting_combo")
-        if combo is not None:
-            opts = ["off", "reactive", "rainbow", "reactive-rainbow"]
-            if profile["default_lighting"] in opts:
-                combo.set_active(opts.index(profile["default_lighting"]))
+        if "rainbow" in profile:
+            app_state["rainbow_enabled"] = bool(profile["rainbow"])
+            if "rainbow_check" in app_state:
+                app_state["rainbow_check"].set_active(bool(profile["rainbow"]))
+        if profile.get("rainbow_value"):
+            app_state["rainbow_value"] = profile["rainbow_value"]
+            _combo_select(app_state.get("rainbow_combo"), profile["rainbow_value"])
 
-    if "selected_effect" in profile and "effect_radios" in app_state:
-        for effect, rb in app_state["effect_radios"].items():
-            rb.set_active(effect == profile["selected_effect"])
+        if profile.get("default_lighting"):
+            app_state["default_lighting"] = profile["default_lighting"]
+            _combo_select(app_state.get("default_lighting_combo"), profile["default_lighting"])
 
-    if "button_mapping" in profile:
-        app_state["button_mapping"].update(profile["button_mapping"])
-        if "redraw_buttons" in app_state:
-            app_state["redraw_buttons"]()
+        if profile.get("light_effect"):
+            app_state["selected_effect"] = profile["light_effect"]
+            radios = app_state.get("effect_radios", {})
+            if profile["light_effect"] in radios:
+                radios[profile["light_effect"]].set_active(True)
 
-    if "macro_enabled" in profile:
-        app_state["settings"]["macro_cps"] = profile.get("macro_cps", 10)
-        app_state["settings"]["macro_trigger_key"] = profile.get("macro_trigger_key", "f6")
-        app_state["settings"]["macro_toggle_key"] = profile.get("macro_toggle_key", "")
-        app_state["settings"]["macro_mode"] = profile.get("macro_mode", "toggle")
-        app_state["settings"]["macro_button"] = profile.get("macro_button", "left")
-        sp = app_state.get("macro_cps_spin")
-        if sp:
-            sp.set_value(profile.get("macro_cps", 10))
-        kd = app_state.get("macro_key_display")
-        if kd:
-            val = profile.get("macro_trigger_key", "f6")
-            if val.startswith("kc:"):
-                parts = val.split(":", 2)
-                key_name = parts[2] if len(parts) > 2 else ""
-                kd.set_text(key_name.upper() if key_name else f"Key {parts[1]}")
-            else:
-                kd.set_text(val.upper())
-        td = app_state.get("macro_toggle_display")
-        if td:
-            toggle_val = profile.get("macro_toggle_key", "")
-            display_names = {
-                "enter": "Enter", "space": "Space", "tab": "Tab",
-                "backspace": "Backspace", "delete": "Delete",
-                "shift": "Shift", "ctrl": "Ctrl", "alt": "Alt", "cmd": "Super",
-                "up": "↑ Up", "down": "↓ Down", "left": "← Left", "right": "→ Right",
-                "home": "Home", "end": "End", "page_up": "Pg Up", "page_down": "Pg Dn",
-                "caps_lock": "Caps Lock", "num_lock": "Num Lock",
-                "insert": "Insert", "menu": "Menu", "pause": "Pause",
-                "print_screen": "PrtSc", "scroll_lock": "Scroll Lock",
-            }
-            if toggle_val.startswith("kc:"):
-                parts = toggle_val.split(":", 2)
-                name_part = parts[2] if len(parts) > 2 else ""
-                if "+" in name_part:
-                    names = name_part.split("+")
-                    display = " + ".join(display_names.get(n, n.upper()) for n in names)
-                elif name_part:
-                    display = display_names.get(name_part, name_part.upper())
-                else:
-                    display = f"Key {parts[1]}"
-                td.set_text(_("Shortcut: ") + display)
-            elif toggle_val.startswith("mouse_"):
-                td.set_text(_("Shortcut: Mouse ") + toggle_val.replace("mouse_", "").title())
-            elif toggle_val:
-                td.set_text(_("Shortcut: ") + toggle_val.upper())
-            else:
-                td.set_text(_("Shortcut: Not set"))
-        engine = app_state.get("macro_engine")
-        toggle_cb = app_state.get("on_toggle_macro")
-        if engine and toggle_cb:
-            engine.stop_toggle_listener()
-            toggle_key = app_state["settings"].get("macro_toggle_key", "")
-            if toggle_key:
-                engine.start_toggle_listener(toggle_key, toggle_cb)
-        mc = app_state.get("macro_mode_combo")
-        if mc:
-            mc.set_active(0 if profile.get("macro_mode", "toggle") == "toggle" else 1)
-        bc = app_state.get("macro_btn_combo")
-        if bc:
-            bvals = ["left", "right", "middle"]
-            bv = profile.get("macro_button", "left")
-            bc.set_active(bvals.index(bv) if bv in bvals else 0)
+        mapping = profile.get("button_mapping")
+        if isinstance(mapping, dict):
+            app_state.setdefault("button_mapping", {})
+            valid = set(caps.button_keys)
+            for key, value in mapping.items():
+                if not valid or key in valid:
+                    app_state["button_mapping"][key] = value
+            if "redraw_buttons" in app_state:
+                app_state["redraw_buttons"]()
 
-    app_state["_loading_profile"] = False
+        if profile.get("led_brightness") is not None:
+            app_state["led_brightness"] = int(profile["led_brightness"])
+
+        strip = app_state.get("_rgb_strip")
+        if strip is not None:
+            strip.queue_draw()
+        editor_refresh = app_state.get("_color_editor_refresh")
+        if editor_refresh is not None:
+            editor_refresh()
+    finally:
+        app_state["_loading_profile"] = False
 
 
 def apply_all_to_device():
-    """Apply all current profile settings to the device with a single rivalcfg call."""
+    """Apply the whole current profile to the device as ONE ordered plan.
+
+    Canonical order lives in ``device_core.build_full_plan`` (zone colors ->
+    reactive -> default lighting -> rainbow last). Fixes W1/W2/W3/P1.
+    """
     save_active_profile()
     caps = get_device_caps()
-    flags = caps.get("color_flags", {})
-
-    args = []
-
-    dpi_vals = app_state.get("dpi_values")
-    if dpi_vals:
-        args.extend(["--sensitivity", ",".join(str(v) for v in dpi_vals)])
-
-    polling_hz = app_state.get("polling_hz")
-    if polling_hz:
-        args.extend(["--polling-rate", str(polling_hz)])
-
-    z1 = app_state.get("z1_hex")
-    z2 = app_state.get("z2_hex")
-    z3 = app_state.get("z3_hex")
-    z4 = app_state.get("z4_hex")
-    if caps.get("lighting_mode") == "aerox":
-        if z1:
-            args.extend([flags.get("z1_hex", "--top-color"), z1])
-        if z2:
-            args.extend([flags.get("z2_hex", "--middle-color"), z2])
-        if z3:
-            args.extend([flags.get("z3_hex", "--bottom-color"), z3])
-        if caps.get("has_reactive"):
-            args.extend(["--reactive-color", app_state.get("reactive_hex", "off")])
-        # NOTE: --rainbow-effect is a flag without value; sending it together
-        # with colors in one call is not supported by rivalcfg chaining here.
-        # Apply rainbow/default-lighting in a follow-up call if needed.
-        extra = []
-        if app_state.get("rainbow_enabled"):
-            extra.append("--rainbow-effect")
-        dl = app_state.get("default_lighting")
-        if caps.get("has_default_lighting") and dl:
-            extra.extend(["--default-lighting", dl])
-    else:
-        effect = app_state.get("selected_effect")
-        if z1:
-            args.extend([flags.get("z1_hex", "--strip-top-color"), z1])
-        if z2:
-            args.extend([flags.get("z2_hex", "--strip-middle-color"), z2])
-        if z3:
-            args.extend([flags.get("z3_hex", "--strip-bottom-color"), z3])
-        if z4 and caps.get("has_logo"):
-            args.extend([flags.get("z4_hex", "--logo-color"), z4])
-        if effect and caps.get("has_light_effect", True):
-            args.extend(["--light-effect", effect])
-        extra = []
-
-    mapping = app_state.get("button_mapping")
-    if mapping:
-        if caps.get("has_extra_buttons"):
-            btn_arg = (
-                f"buttons(button1={mapping.get('button1', 'button1')}; "
-                f"button2={mapping.get('button2', 'button2')}; "
-                f"button3={mapping.get('button3', 'button3')}; "
-                f"button4={mapping.get('button4', 'button4')}; "
-                f"button5={mapping.get('button5', 'button5')}; "
-                f"button6={mapping.get('button6', 'dpi')}; "
-                f"button7={mapping.get('button7', 'disabled')}; "
-                f"button8={mapping.get('button8', 'disabled')}; "
-                f"button9={mapping.get('button9', 'disabled')}; "
-                f"scrollup={mapping.get('scrollup', 'scrollup')}; "
-                f"scrolldown={mapping.get('scrolldown', 'scrolldown')}; "
-                f"layout=qwerty)"
-            )
-        else:
-            btn_arg = (
-                f"buttons(button1={mapping['button1']}; button2={mapping['button2']}; "
-                f"button3={mapping['button3']}; button4={mapping['button4']}; "
-                f"button5={mapping['button5']}; button6={mapping['button6']}; "
-                f"scrollup={mapping['scrollup']}; scrolldown={mapping['scrolldown']}; "
-                f"layout=qwerty)"
-            )
-        args.extend(["--buttons", btn_arg])
-
-    if args:
-        if extra:
-            def _after_main(success, msg, _extra=extra):
-                if success:
-                    run_rivalcfg(_extra)
-            run_rivalcfg(args, _after_main)
-        else:
-            run_rivalcfg(args)
-        run_rivalcfg(args)
-        if app_state["settings"].get("hyprland_mouse_sync") and HYPRLAND_AVAILABLE:
-            dpi_vals = app_state.get("dpi_values")
-            if dpi_vals:
-                _hyprctl_sync_mouse_to_rivalcfg(dpi_vals[0])
+    plan = device_core.build_full_plan(caps, current_apply_state())
+    _queue_plan(plan)
+    if app_state["settings"].get("hyprland_mouse_sync") and HYPRLAND_AVAILABLE:
+        dpi_vals = app_state.get("dpi_values")
+        if dpi_vals:
+            _hyprctl_sync_mouse_to_rivalcfg(dpi_vals[0])
 
 
 def create_settings_page():
@@ -3472,39 +2449,6 @@ def create_settings_page():
                 _hyprctl_set_follow_mouse(val)
         follow_combo.connect("changed", on_follow_mouse_changed)
 
-        # Keybind for macro toggle
-        bind_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
-        bind_row.get_style_context().add_class("setting-row")
-
-        bind_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-        bind_text.set_hexpand(True)
-        bind_label = Gtk.Label(label=_("Macro Toggle Keybind"))
-        bind_label.get_style_context().add_class("setting-label")
-        bind_label.set_halign(Gtk.Align.START)
-        bind_desc = Gtk.Label(label=_("Register macro toggle as Hyprland keybind"))
-        bind_desc.get_style_context().add_class("setting-desc")
-        bind_desc.set_halign(Gtk.Align.START)
-        bind_text.pack_start(bind_label, False, False, 0)
-        bind_text.pack_start(bind_desc, False, False, 0)
-        bind_row.pack_start(bind_text, True, True, 0)
-
-        bind_switch = Gtk.Switch()
-        bind_switch.set_active(app_state["settings"].get("hyprland_macro_bind", False))
-        bind_row.pack_start(bind_switch, False, False, 0)
-        hyprland_card.pack_start(bind_row, False, False, 0)
-
-        def on_hyprland_macro_bind_toggled(s, *a):
-            val = bind_switch.get_active()
-            app_state["settings"]["hyprland_macro_bind"] = val
-            logging.info("Settings: hyprland_macro_bind = %s", val)
-            save_settings()
-            toggle_key = app_state["settings"].get("macro_toggle_key", "")
-            if val and toggle_key:
-                _hyprctl_bind_keybind(toggle_key, "pkill -SIGUSR1 rivalcfg-gui", "rivalcfg-gui macro toggle")
-            elif not val and toggle_key:
-                _hyprctl_unbind_keybind(toggle_key)
-        bind_switch.connect("notify::active", on_hyprland_macro_bind_toggled)
-
         # Hyprland status
         status_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         status_row.set_margin_top(8)
@@ -3535,34 +2479,32 @@ def create_settings_page():
     def on_check_mouse(btn):
         def on_detect(success, msg):
             if success and is_steelseries_connected(msg):
-                caps = get_device_caps(force=True)
-                label = caps.get("device_label") or _("Mouse connected")
+                caps_now = get_device_caps(force=True)
+                label = _caps_device_name(caps_now)
                 GLib.idle_add(set_status, "ok", "✓ " + label)
             else:
                 GLib.idle_add(set_status, "error", "✗ " + _("Mouse not found"))
 
-        def on_list(success, msg):
-            GLib.idle_add(app_state["devices_buffer"].set_text, msg if msg else _("No device found."))
-
         run_rivalcfg(["--print-debug"], on_detect)
-        run_rivalcfg(["--list"], on_list)
 
     check_btn.connect("clicked", on_check_mouse)
     diag_btn_box.pack_start(check_btn, False, False, 0)
 
-    fw_btn = Gtk.Button(label=_("FIRMWARE VERSION"))
-    fw_btn.get_style_context().add_class("apply-btn")
+    caps_now = get_device_caps()
+    if caps_now.has_firmware:
+        fw_btn = Gtk.Button(label=_("FIRMWARE VERSION"))
+        fw_btn.get_style_context().add_class("apply-btn")
 
-    def on_firmware(btn):
-        def cb(success, msg):
-            if success:
-                GLib.idle_add(set_status, "ok", "✓ " + _("Firmware: %s") % msg)
-            else:
-                GLib.idle_add(set_status, "error", "✗ " + _("Mouse not connected"))
-        run_rivalcfg(["--firmware-version"], cb)
+        def on_firmware(btn):
+            def cb(success, msg):
+                if success:
+                    GLib.idle_add(set_status, "ok", "✓ " + _("Firmware: %s") % msg)
+                else:
+                    GLib.idle_add(set_status, "error", "✗ " + _("Could not read firmware"))
+            run_rivalcfg(["--firmware-version"], cb)
 
-    fw_btn.connect("clicked", on_firmware)
-    diag_btn_box.pack_start(fw_btn, False, False, 0)
+        fw_btn.connect("clicked", on_firmware)
+        diag_btn_box.pack_start(fw_btn, False, False, 0)
 
     reset_btn = Gtk.Button(label=_("FACTORY RESET"))
     reset_btn.get_style_context().add_class("danger-btn")
@@ -3578,69 +2520,46 @@ def create_settings_page():
         dialog.set_title(_("Factory Reset"))
         response = dialog.run()
         dialog.destroy()
-        if response == Gtk.ResponseType.OK:
-            logging.info("Factory reset executed")
-            def cb(success, msg):
-                if not success:
-                    GLib.idle_add(set_status, "error", "✗ " + _("Mouse not connected"))
-                    return
-                caps_now = get_device_caps()
-                flags = caps_now.get("color_flags", {})
-                orange = "ff6600"
-                for key in ["z1_hex", "z2_hex", "z3_hex", "z4_hex", "reactive_hex"]:
-                    default_val = "off" if key == "reactive_hex" else orange
-                    app_state[key] = default_val
-                    if key in app_state.get("color_buttons", {}) and default_val != "off":
-                        rgba = Gdk.RGBA()
-                        rgba.parse(f"#{default_val}")
-                        app_state["color_buttons"][key].set_rgba(rgba)
-                    if key in app_state.get("color_previews", {}):
-                        app_state["color_previews"][key].queue_draw()
-                if "rainbow_check" in app_state:
-                    app_state["rainbow_check"].set_active(False)
-                app_state["rainbow_enabled"] = False
-                app_state["selected_effect"] = "steady"
-                z1 = app_state["z1_hex"]
-                z2 = app_state["z2_hex"]
-                z3 = app_state["z3_hex"]
-                z4 = app_state["z4_hex"]
-                if caps_now.get("lighting_mode") == "aerox":
-                    def after_z1(success, msg):
-                        if not success:
-                            return
-                        run_rivalcfg([flags.get("z2_hex", "--middle-color"), z2], after_z2)
-                    def after_z2(success, msg):
-                        if not success:
-                            return
-                        run_rivalcfg([flags.get("z3_hex", "--bottom-color"), z3], after_z3)
-                    def after_z3(success, msg):
-                        if not success:
-                            return
-                        if caps_now.get("has_default_lighting"):
-                            run_rivalcfg(["--default-lighting", "rainbow"])
-                        else:
-                            run_rivalcfg(["--rainbow-effect"])
-                    run_rivalcfg([flags.get("z1_hex", "--top-color"), z1], after_z1)
-                else:
-                    def after_z1(success, msg):
-                        if not success:
-                            return
-                        run_rivalcfg([flags.get("z2_hex", "--strip-middle-color"), z2], after_z2)
-                    def after_z2(success, msg):
-                        if not success:
-                            return
-                        run_rivalcfg([flags.get("z3_hex", "--strip-bottom-color"), z3], after_z3)
-                    def after_z3(success, msg):
-                        if not success:
-                            return
-                        run_rivalcfg([flags.get("z4_hex", "--logo-color"), z4], after_z4)
-                    def after_z4(success, msg):
-                        if not success:
-                            return
-                        run_rivalcfg(["--light-effect", "steady"])
-                    run_rivalcfg([flags.get("z1_hex", "--strip-top-color"), z1], after_z1)
-                save_active_profile()
-            run_rivalcfg(["--reset"], cb)
+        if response != Gtk.ResponseType.OK:
+            return
+        logging.info("Factory reset executed")
+        caps_now = get_device_caps()
+        orange = "ff6600"
+        zones = {}
+        for zone in caps_now.lighting.zones:
+            zones[zone.key] = orange
+            btn_widget = app_state.get("color_buttons", {}).get(zone.key)
+            if btn_widget is not None:
+                btn_widget.set_hex(orange)
+        app_state["zones"] = zones
+        app_state["reactive_hex"] = "off"
+        if "rainbow_check" in app_state:
+            app_state["rainbow_check"].set_active(False)
+        app_state["rainbow_enabled"] = False
+        app_state["selected_effect"] = caps_now.lighting.light_effect_default or "steady"
+        if caps_now.lighting.has_default_lighting:
+            app_state["default_lighting"] = caps_now.lighting.default_lighting_default or "rainbow"
+            _combo_select(app_state.get("default_lighting_combo"), app_state["default_lighting"])
+        effects = app_state.get("effect_radios", {})
+        if app_state["selected_effect"] in effects:
+            effects[app_state["selected_effect"]].set_active(True)
+        if "redraw_buttons" in app_state:
+            app_state["redraw_buttons"]()
+
+        # One canonical plan: --reset, then zone colors -> reactive off ->
+        # default lighting -> rainbow last (W5).
+        plan = device_core.ApplyPlan("Factory reset")
+        plan.add(["--reset"])
+        reset_state = {
+            "zones": zones,
+            "reactive": "off",
+            "default_lighting": app_state.get("default_lighting"),
+            "rainbow": False,
+            "light_effect": app_state.get("selected_effect"),
+        }
+        plan.steps.extend(device_core.build_lighting_plan(caps_now, reset_state).steps)
+        _queue_plan(plan)
+        save_active_profile()
 
     reset_btn.connect("clicked", on_factory_reset)
     diag_btn_box.pack_start(reset_btn, False, False, 0)
@@ -3706,23 +2625,20 @@ def rebuild_ui():
         window.set_icon(icon_pixbuf)
         Gtk.Window.set_default_icon_from_file(icon_path)
 
-    engine = app_state.get("macro_engine")
-    if engine:
-        engine.stop_toggle_listener()
     app_state["nav_buttons"] = []
     app_state["is_rebuild"] = True
     create_window_content(window)
 
     window.show_all()
 
-    macro_box = app_state.get("macro_settings_box")
-    if macro_box:
-        macro_box.set_visible(app_state["settings"].get("macro_enabled", False))
-
     active = app_state["settings"].get("active_profile", "Default")
     profile_data = load_profile_data(active)
     if profile_data:
         apply_profile_to_ui(profile_data)
+
+    # Language switch is UI-only: no device writes (W4).
+    set_status("ok", "✓ " + _("Loaded profile {name} — press Apply to send").format(
+        name=app_state["settings"].get("active_profile", "Default")))
 
     if app_state["settings"]["startup_minimize"]:
         window.iconify()
@@ -3735,6 +2651,7 @@ def rebuild_ui():
             "rgb": _("RGB"),
             "buttons": _("BUTTONS"),
             "devices": _("DEVICES"),
+            "power": _("POWER"),
             "settings": _("SETTINGS"),
             "about": _("ABOUT"),
         }
@@ -3760,17 +2677,14 @@ def create_window():
     lang = app_state["settings"].get("language", None)
     _set_language(lang)
 
-    if PYNPUT_AVAILABLE:
-        app_state["macro_engine"] = MacroEngine()
-
     window = Gtk.Window(title="RivalCFG GUI")
     window.set_default_size(1280, 720)
     window.set_resizable(True)
 
     def on_destroy(*a):
-        if app_state.get("macro_engine"):
-            app_state["macro_engine"].stop()
-            app_state["macro_engine"].stop_toggle_listener()
+        queue = app_state.get("command_queue")
+        if queue is not None:
+            queue.stop()
         Gtk.main_quit()
 
     window.connect("destroy", on_destroy)
@@ -3794,13 +2708,11 @@ def create_window():
 
     update_accent_color(app_state["settings"]["accent_color"])
 
+    _init_command_queue()
+
     create_window_content(window)
 
     window.show_all()
-
-    macro_box = app_state.get("macro_settings_box")
-    if macro_box:
-        macro_box.set_visible(app_state["settings"].get("macro_enabled", False))
 
     active = app_state["settings"].get("active_profile", "Default")
     profiles = list_profiles()
@@ -3812,14 +2724,8 @@ def create_window():
     if profile_data:
         apply_profile_to_ui(profile_data)
 
-    # Always start with auto-clicker disabled
-    app_state["settings"]["macro_enabled"] = False
-    sw = app_state.get("macro_switch")
-    if sw:
-        sw.set_active(False)
-    engine = app_state.get("macro_engine")
-    if engine:
-        engine.stop()
+    # Never write to the device on startup (W4): load into the UI only.
+    set_status("ok", "✓ " + _("Loaded profile {name} — press Apply to send").format(name=active))
 
     if app_state["settings"]["startup_minimize"]:
         window.iconify()
@@ -3884,8 +2790,9 @@ def create_window_content(window):
         app_state["settings"]["active_profile"] = name
         save_settings()
         update_profile_selector_label(name)
-        apply_all_to_device()
-        logging.info("Profile activated: %s", name)
+        # Loading a profile must NOT write to the device (W4).
+        set_status("ok", "✓ " + _("Loaded profile {name} — press Apply to send").format(name=name))
+        logging.info("Profile loaded (no write): %s", name)
         if close_popover:
             close_profile_popover()
 
@@ -4128,6 +3035,7 @@ def create_window_content(window):
         ("rgb", _("RGB"), create_rgb_page()),
         ("buttons", _("BUTTONS"), create_buttons_page()),
         ("devices", _("DEVICES"), create_devices_page()),
+        ("power", _("POWER"), create_power_page()),
         ("settings", _("SETTINGS"), create_settings_page()),
         ("about", _("ABOUT"), create_about_page()),
     ]
@@ -4145,16 +3053,20 @@ def create_window_content(window):
 
     nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
 
+    _start_page = os.environ.get("RIVALCFG_GUI_START_PAGE", "dpi")
     for i, (name, title, __page) in enumerate(pages):
         btn = Gtk.Button(label=title)
         btn.get_style_context().add_class("nav-btn")
-        if i == 0:
+        if name == _start_page:
             btn.get_style_context().add_class("nav-active")
         btn.set_hexpand(True)
         btn.set_halign(Gtk.Align.FILL)
         btn.connect("clicked", on_nav_clicked, name)
         nav_box.pack_start(btn, False, False, 0)
         app_state["nav_buttons"].append(btn)
+
+    if _start_page != "dpi":
+        GLib.idle_add(stack.set_visible_child_name, _start_page)
 
     nav_scroll = Gtk.ScrolledWindow()
     nav_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
@@ -4208,15 +3120,36 @@ def create_window_content(window):
             def cb(success, msg):
                 if success and is_steelseries_connected(msg):
                     logging.info("Startup: mouse connected")
-                    caps = get_device_caps(force=True)
-                    label = caps.get("device_label") or _("Mouse connected")
-                    set_status("ok", "✓ " + label)
+                    DEVICE_MANAGER.invalidate()
+                    caps_now = DEVICE_MANAGER.get_caps(refresh=True)
+                    set_status("ok", "✓ " + _caps_device_name(caps_now))
                 else:
                     logging.warning("Startup: mouse not found")
                     set_status("error", "✗ " + _("Mouse not found"))
             run_rivalcfg(["--print-debug"], cb)
 
         GLib.idle_add(startup_check)
+
+        def _poll_hotplug():
+            try:
+                sig = DEVICE_MANAGER.device_signature()
+            except Exception:
+                return True
+            if sig != app_state.get("device_signature"):
+                app_state["device_signature"] = sig
+                DEVICE_MANAGER.invalidate()
+                logging.info("Device set changed: %s", sig)
+                if sig:
+                    caps_now = DEVICE_MANAGER.get_caps(refresh=True)
+                    set_status("ok", "✓ " + _caps_device_name(caps_now))
+                else:
+                    set_status("error", "✗ " + _("Mouse not found"))
+                refresh = app_state.get("_refresh_devices")
+                if refresh is not None:
+                    refresh()
+            return True
+
+        GLib.timeout_add_seconds(3, _poll_hotplug)
 
 
 def main():
@@ -4227,4 +3160,5 @@ def main():
     Gtk.main()
 
 
-main()
+if __name__ == "__main__":
+    main()

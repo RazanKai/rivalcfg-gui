@@ -29,19 +29,14 @@ cleanup:
 modules:
   - python3-requirements.json
 
-  - name: evdev_helper
-    buildsystem: simple
-    build-commands:
-      - cc -O2 -Wall -o evdev_helper evdev_helper.c
-      - install -Dm755 evdev_helper /app/lib/rivalcfg-gui/evdev_helper
-    sources:
-      - type: file
-        path: ../../evdev_helper.c
-
   - name: rivalcfg-gui
     buildsystem: simple
     build-commands:
       - install -Dm755 rivalcfg_gui.py /app/lib/rivalcfg-gui/rivalcfg_gui.py
+      - install -Dm644 device_core.py /app/lib/rivalcfg-gui/device_core.py
+      - install -Dm644 mouse3d.py /app/lib/rivalcfg-gui/mouse3d.py
+      - install -Dm644 widgets.py /app/lib/rivalcfg-gui/widgets.py
+      - install -Dm644 colorutil.py /app/lib/rivalcfg-gui/colorutil.py
       - install -Dm755 dist/flatpak/run.sh /app/bin/run.sh
       - |
         for lang_dir in locales/*/LC_MESSAGES; do
