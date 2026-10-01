@@ -255,10 +255,17 @@ def splat_grid(xs, ys, vs, x_edges, y_edges, mode):
         if not missing.any():
             break
         padded = np.pad(grid, 1, mode="edge")
-        neigh = np.nanmean(np.stack([
+        neigh = np.stack([
             padded[:-2, 1:-1], padded[2:, 1:-1],
             padded[1:-1, :-2], padded[1:-1, 2:],
-        ]), axis=0)
+        ])
+        # Average over the neighbours that have a value: a cell whose four
+        # neighbours are all still empty has nothing to average, and taking a
+        # plain nanmean of that slice warns ("Mean of empty slice").  Leave it
+        # NaN -- a later pass, or the global fallback below, fills it.
+        seen = np.isfinite(neigh).sum(axis=0)
+        neigh = np.where(seen, np.nansum(neigh, axis=0) / np.maximum(seen, 1),
+                         np.nan)
         grid = np.where(missing, neigh, grid)
     fallback = np.nanmedian(grid)
     grid = np.where(np.isnan(grid), fallback, grid)

@@ -491,3 +491,49 @@ checkout.
 (pitch, cell extent, uniform span) rather than a magic count; the keycap
 nose-taper and wheel-clearance tests were made robust to the resampled
 outline rather than loosened.
+
+---
+
+## 2026-10-02 (cont.) — keycap rear edge and the field's flank reach
+
+Two follow-ups after re-reading the official top view at higher zoom.  Both
+supersede numbers in the entry above.
+
+**The caps end just behind the wheel, not at 55 mm.**  The top view shows one
+*continuous* perforation from the keycaps' rear edge to the tail, parted only
+by the bare channel down the centreline (the wheel slot and the CPI housing).
+The old model had the caps running back to 55 mm with a wedge ramp
+(`BTN_WEDGE_Y0`) tapering their outer edge, so the field could only start
+between the wedge and the tail.  `BTN_Y1` is now `41.5` mm and `_btn_edges()`
+returns `_split_u(y), outer` with no ramp: the caps' rear edge crosses the top
+surface as a nearly straight line, and the perforation takes over there.
+`mouse3d._HONEY_REAR_Y` follows to 41.5 mm, the `_HONEY_DPI` ellipse and the
+`_HONEY_BAND`/`_HONEY_WEDGE` rectangles are gone, replaced by the
+`_HONEY_CENTRE` capsule (radius 6.4 mm, 36–72 mm) that keeps the channel bare
+while the two patches flanking the wheel run back and merge with the rear
+field.  The lattice is anchored on the caps' rear edge (front-anchored) rather
+than on the tail, because that edge is the one boundary the drawing pins down;
+`_HONEY_RIM = 3.0` mm keeps a bare strip at the tail rim.
+
+**The field wrapped too far down the flanks.**  Overlaying the model's openings
+on the drawing's top view showed the outer cells sitting *on* the outline.  The
+drawing puts the outermost opening in each row at ~0.91 of the silhouette
+half-width and a cell's outer vertex reaches a further 1.95 mm, so the bare rim
+it leaves is only ~1 mm (3.2 px of a 93 px half-width).  Solved for the arc
+fraction that lands the vertex at that rim at each station: it is nearly flat,
+0.533 at the caps' rear edge rising only to 0.588 at the tail — the old value
+ramped 0.62 → 0.94, which is why the cells rode over the edge.  The reach grows
+so slowly because the tail's cross-section is mostly rolled shoulder: most of
+its arc buys very little width.
+
+Verified: per-row outer-edge ratio 0.83–0.90 against the drawing's 0.77–0.90
+envelope, with the same stagger oscillation; the tail now stops at ~73 % of the
+local height in the side view, matching the drawing's side view.  Field:
+23 rows, 43.5 → 119.4 mm.  **66 tests pass.**
+
+**Also.**  `extract_aerox5_mesh.py`'s hole-filling pass averaged four
+neighbours with `np.nanmean`, which warns ("Mean of empty slice") when a cell's
+neighbours are all still empty during the first iteration; it now averages over
+the finite ones and leaves real holes to the next pass or the global fallback.
+Numerically a no-op — the regenerated mesh is unchanged — but the build is
+warning-clean under `-W error::RuntimeWarning`.

@@ -108,12 +108,16 @@ def test_honeycomb_holes_are_uniform_on_the_surface():
 
 
 def test_honeycomb_reaches_forward_of_the_body_centre():
-    """The perforation is not only the rear field: the two patches flanking
-    the scroll wheel carry it too, well forward of the body centre."""
+    """The perforation is not only the rear field: the two wedges flanking the
+    scroll wheel carry it too, well forward of the body centre.
+
+    The fields flanking the scroll wheel start where the keycaps end, 41.5 mm
+    from the nose, so the lattice's first row that whole clears the caps lands
+    at 43.5 mm -- a third of the body forward of the centre (63.8 mm)."""
     holes = mouse3d.DETAILS["holes"]
     forward = [h for h in holes if h["center"].y < 0.0]
     assert forward
-    assert min(_hole_station_mm(h) for h in forward) < 35.0
+    assert min(_hole_station_mm(h) for h in forward) < 45.0
 
 
 def test_lever_spans_the_thumb_buttons():

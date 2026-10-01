@@ -330,13 +330,24 @@ def build_buttons():
 _HONEY_CELL = 3.45           # mm, checkerboard node spacing
 _HONEY_HALF = 2.2            # mm, half-diagonal (vertex radius) of one cell
 _HONEY_ROUND = 0.55          # mm, corner radius of one cell
-_HONEY_REAR_Y = 54.5         # mm from the nose: rear field starts behind the caps
-_HONEY_WRAP_Y = 112.0        # mm: by here the field has reached the base rim
-_HONEY_WRAP0 = 0.62          # flank reach at _HONEY_REAR_Y, apex -> base rim
-_HONEY_WRAP1 = 0.94          # flank reach at the tail
-_HONEY_DPI = (0.0, 53.5, 6.2, 8.6)     # DPI housing: centre (x, y), radii (mm)
-_HONEY_BAND = (29.0, 50.0, 9.0, 24.5)  # wheel-side patches: y range, |x| range
+_HONEY_REAR_Y = 41.5         # mm from the nose: rear field starts behind the caps
+_HONEY_WRAP_Y = 119.4        # mm: station of the field's last row
+# Flank reach, as a fraction of the cross-section's arc, apex -> base rim.
+# Measured off the official top view: the outermost opening in each row sits
+# at ~0.91 of the silhouette half-width, and a cell's outer vertex reaches a
+# further 1.95 mm, so the field stops about a millimetre inside the outline.
+# The reach grows only slowly towards the tail, where the section's arc is
+# short and most of it is the rolled shoulder.
+_HONEY_WRAP0 = 0.533         # flank reach at _HONEY_REAR_Y, apex -> base rim
+_HONEY_WRAP1 = 0.588         # flank reach at _HONEY_WRAP_Y
+# The centre channel has no perforation: it is the scroll wheel's slot and the
+# CPI housing.  A capsule down the centreline covers both with a margin, and
+# leaves the two patches flanking the wheel to run back and merge with the
+# rest of the field behind it -- the top view shows one continuous perforation
+# from the caps' rear edge to the tail, parted only by that channel.
+_HONEY_CENTRE = (6.4, 36.0, 72.0)      # radius, y0, y1 (mm)
 _HONEY_PROFILE = 192         # samples per side, crown apex -> base rim
+_HONEY_RIM = 3.0             # mm of bare shell left at the tail's rim
 _HONEY_RIM_Z = 1.5           # mm: below this a ring point is base, not shell
 
 _MM = _mesh.LENGTH_MM
@@ -509,32 +520,33 @@ def _honey_accept(y_mm, u_mm, x_mm, length):
     runs past the end of a profile would be clamped onto the base rim and
     drag the cell out into a sliver (the "fan" at the tail).
     """
-    if y_mm >= _HONEY_REAR_Y:
-        t = min(1.0, max(0.0, (y_mm - _HONEY_REAR_Y)
-                          / (_HONEY_WRAP_Y - _HONEY_REAR_Y)))
-        reach = (_HONEY_WRAP0 + (_HONEY_WRAP1 - _HONEY_WRAP0) * t) * length
-        if abs(u_mm) + _HONEY_TIP > reach:
-            return False
-        dx, dy, rx, ry = _HONEY_DPI
-        return ((x_mm - dx) / rx) ** 2 + ((y_mm - dy) / ry) ** 2 >= 1.0
-    y0, y1, x0, x1 = _HONEY_BAND
-    return y0 <= y_mm <= y1 and x0 <= abs(x_mm) <= x1
+    if y_mm < _HONEY_REAR_Y:
+        return False
+    t = min(1.0, max(0.0, (y_mm - _HONEY_REAR_Y)
+                      / (_HONEY_WRAP_Y - _HONEY_REAR_Y)))
+    reach = (_HONEY_WRAP0 + (_HONEY_WRAP1 - _HONEY_WRAP0) * t) * length
+    if abs(u_mm) + _HONEY_TIP > reach:
+        return False
+    # Clear of the wheel slot and the CPI housing: the distance from the node
+    # to the channel's spine (x = 0, y0 + r .. y1 - r) is what has to clear.
+    cr, cy0, cy1 = _HONEY_CENTRE
+    spine = min(max(y_mm, cy0 + cr), cy1 - cr)
+    return x_mm ** 2 + (y_mm - spine) ** 2 >= cr * cr
 
 
 def build_honeycomb():
     """Honeycomb openings as loops on the shell (normalised coordinates)."""
     cell = _HONEY_CELL
     tip = _HONEY_TIP
-    # Rows run from just behind the keycaps to the tail, on a lattice whose
-    # phase is fixed by _HONEY_REAR_Y.  Where the field *ends* is free, and
-    # the last row is the one that leaves the tail rim the reference views
-    # show (~3 mm); anchoring on the keycap edge instead left whatever gap
-    # the phase happened to leave -- 6 mm of bare shell at the tail.  The
-    # phase itself has to stay put: the wheel-side band and the rear field
-    # share it, and shifting one against the other makes the bare strip
-    # between them stop being a whole number of cells.
-    top = _HONEY_REAR_Y + math.floor(
-        (_HONEY_YS[-1] - tip - _HONEY_REAR_Y) / cell) * cell
+    # Rows run from just behind the keycaps to the tail: the first row is
+    # anchored on the caps' rear edge, one cell tip clear of it so the
+    # openings do not run under the keycap, and the rest follow on the
+    # lattice up to the last row that still leaves the tail rim the reference
+    # views show.  Anchoring on the tail instead moved the front edge by
+    # whatever the phase happened to leave, and the caps' edge is the one
+    # boundary the top view pins down.
+    top = (_HONEY_REAR_Y + tip) + math.floor(
+        (_HONEY_YS[-1] - _HONEY_RIM - 2 * tip - _HONEY_REAR_Y) / cell) * cell
     loops = []
     for row in range(math.floor((24.0 - top) / cell), 1):
         v0 = top + row * cell
@@ -544,11 +556,10 @@ def build_honeycomb():
         for i in range(-20, 21):
             u0 = off + i * 2 * cell
             x, _z, length = _surface_pt(v0, u0)
-            if v0 >= _HONEY_REAR_Y:
-                # The tips of the rear cells sit further back, where the
-                # flank is shorter; cull against the tighter of the two.
-                _x, _z, rear = _surface_pt(v0 + tip, u0)
-                length = min(length, rear)
+            # The cell's rear tip sits further back, where the flank is
+            # shorter; cull the reach against the tighter of the two.
+            _x, _z, rear = _surface_pt(v0 + tip, u0)
+            length = min(length, rear)
             if not _honey_accept(v0, u0, x, length):
                 continue
             pts = []

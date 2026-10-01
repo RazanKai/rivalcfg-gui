@@ -465,7 +465,7 @@ def build_base(mesh):
 # Main click buttons
 # ---------------------------------------------------------------------------
 
-BTN_Y0, BTN_Y1 = 3.5, 55.0
+BTN_Y0, BTN_Y1 = 3.5, 41.5
 
 # Centre-split channel.  In front of the wheel slot the two caps meet at the
 # centreline; from the wheel slot back they part into a channel that clears
@@ -495,11 +495,16 @@ def _split_u(y):
 
 
 def _btn_edges(y):
-    """Inner/outer u bounds of the keycap at length *y* (rounded petal)."""
+    """Inner/outer u bounds of the keycap at length *y* (rounded petal).
+
+    The caps run from the leading edge to ``BTN_Y1``, where their rear edge
+    crosses the top surface as a nearly straight line just behind the scroll
+    wheel's slot (official top view): the perforation takes over from there,
+    wrapping the shoulder and running back over the whole rear shell.
+    """
     ty = _clamp01((y - BTN_Y0) / 11.0)          # 0 at nose, 1 behind
     # outer edge: narrow at the nose, bulging out over the body
-    outer = (0.30 + 0.56 * (1.0 - (1.0 - ty) ** 2)) * _clamp01(
-        min(1.0, (BTN_Y1 - y) / 4.0))
+    outer = (0.30 + 0.56 * (1.0 - (1.0 - ty) ** 2))
     # inner edge: the centre split / wheel-and-CPI channel
     return _split_u(y), outer
 
@@ -531,8 +536,6 @@ def build_main_buttons(mesh):
         rows, pts = [], []
         for y in ys:
             inner, outer = _btn_edges(y)
-            if outer <= inner + 0.02:
-                outer = inner + 0.02
             row, rowp = [], []
             for u in np.linspace(inner, outer, nu):
                 a = half_width(y)
