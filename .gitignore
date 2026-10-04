@@ -18,5 +18,10 @@ build-dir/
 # Mesh build artefacts (regenerate with tools/aerox5_model.py)
 build/
 
+# Aerox 5 v3 reconstruction sources (35 MB of .obj/.stl plus reference views).
+# Input to tools/extract_aerox5_v3_mesh.py, which regenerates aerox5_mesh.py;
+# the generated module is what the repo ships.
+aerox5_3d_files/
+
 # Standalone rivalcfg downloaded during Debian build
 rivalcfg-cli_v*/

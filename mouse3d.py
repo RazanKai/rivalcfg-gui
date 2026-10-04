@@ -22,7 +22,7 @@ Coordinates (normalised so the length is 1.0):
     y : back (+) / front (-)      length
     z : up (+) / down (-)         height
 
-The real Aerox 5 is ~127.6 mm long, ~68.4 mm wide, ~42.1 mm tall.
+The real Aerox 5 is ~128.2 mm long, ~68.4 mm wide, ~42.0 mm tall.
 """
 
 from __future__ import annotations
@@ -46,6 +46,11 @@ for _y, _ring in _mesh.RINGS:
 
 #: Number of points around each ring (wireframe resolution).
 _RING_STEPS = len(_mesh.RINGS[0][1])
+
+#: Mid-height of the body.  A hole rim's normal only tells us which way the
+#: loop happens to be wound, so it is flipped to point away from this axis.
+_Z_AXIS = 0.5 * (min(_s[2] for _s in _STATIONS)
+                 + max(_s[3] for _s in _STATIONS))
 
 
 def _lerp_lookup(xs, ys, v):
@@ -182,35 +187,32 @@ def _smooth_closed(points, per_seg=6):
 
 
 def _snap_to_shell(x, y, lift=0.006):
-    """Seat a normalised outline point *on* the shell, following its curve.
+    """Seat a normalised outline point on the shell's surface height.
 
-    :func:`_cap_on_surface` only corrects height: a point that belongs on
-    the shoulder keeps its flat chord there, which is what makes the click
-    panels read as plates bolted over the shell.  This walks the cross-
-    section to the arc position with the same ``x`` and takes that point --
+    The extracted cap outlines are planar -- they come off the plane the
+    source OBJ built them on -- while the real crown rises and falls beneath
+    them, so drawn as-is the click panels read as plates bolted over the
+    shell.  This gives each point the surface height at its own ``(x, y)``,
     so the outline bends with the shell, over the crown and down the flank.
+
+    ``x`` and ``y`` are passed through untouched: the outline's plan-view
+    geometry is the extracted boundary, and the fork the keycaps leave
+    around the scroll wheel is part of it.
+
+    The height comes from :func:`top_surface_z` -- the same bilinear lookup
+    grid the wheel and the honeycomb already use.  It used to invert the
+    per-station arc-length profiles instead, walking the cross-section to
+    the sample whose ``|x|`` matched.  That inversion is ill-conditioned
+    exactly where the keycap wraps the shoulder: near the widest line the
+    surface runs almost vertical, so a fraction of a millimetre of ``|x|``
+    spans several millimetres of ``z``, and the "nearest sample" lookup
+    hopped between brackets.  Its upper bound was also a global ``argmax``
+    over a nearly flat profile, which flipped between distant indices for
+    neighbouring points.  Between them those two tore the keycap edges into
+    a sawtooth (up to 2.2 mm of jitter, worst in the side view).  The grid
+    has neither a branch nor an inversion, so seating is continuous.
     """
-    x_mm, y_mm = x * _MM, y * _MM + _Y0_MM
-    sign = -1.0 if x_mm < 0 else 1.0
-    i, t = _ring_span(y_mm)
-    # Both flanks are snapped against the same profile so the two keycaps
-    # stay exact mirrors of each other; the shell is symmetric to well
-    # under a millimetre, and the two sampled profiles are not identical,
-    # which otherwise showed up as a ~0.5 mm left/right keycap mismatch.
-    sides = _HONEY_POS
-    px = [sides[i][j][0] + (sides[i + 1][j][0] - sides[i][j][0]) * t
-          for j in range(_HONEY_PROFILE)]
-    pz = [sides[i][j][1] + (sides[i + 1][j][1] - sides[i][j][1]) * t
-          for j in range(_HONEY_PROFILE)]
-    # The profile runs crown -> widest point -> base rim, so ``|x|`` only
-    # grows up to the widest sample and curls back in after it.  Searching
-    # the whole profile would snap a shoulder point onto the underside; a
-    # simple "stop when |x| shrinks" walk instead fires on the very first
-    # step of the left flank, whose |x| falls from the off-centre crown
-    # sample through zero before it grows again.  Cut at the widest sample.
-    widest = max(range(_HONEY_PROFILE), key=lambda j: abs(px[j]))
-    best = min(range(widest + 1), key=lambda j: abs(px[j] - abs(x_mm)))
-    return sign * px[best] / _MM, y, pz[best] / _MM + lift
+    return x, y, top_surface_z(x, y) + lift
 
 
 def _cap_on_surface(key, lift=0.006):
@@ -309,275 +311,58 @@ def build_buttons():
 
 
 
-# ---------------------------------------------------------------------------
-# Honeycomb: a parametric lattice mapped onto the real shell surface
-# ---------------------------------------------------------------------------
-#
-# The extracted ``RIMS`` turned out to be thin slivers (~2 mm x 6 mm) rather
-# than the round openings of the real mouse, so the pattern is generated
-# instead.  Measured off the official 1:1 views (top view: 0.3554 mm/px):
-# the openings are *rounded diamonds* on a staggered lattice whose nearest
-# neighbours sit at 45 deg, 4.9 mm apart -- i.e. a checkerboard of 3.45 mm
-# -- with ~1.8 mm ribs, and the pattern runs from just behind the click caps
-# to the tail, wrapping the crown and down the flanks.
-#
-# The lattice is laid out in ``(u, v)``: ``v`` is the station along the
-# mouse, ``u`` the arc distance along the cross-section away from the crown
-# apex, so the pattern stays uniform where it rolls over the shoulder.  Both
-# are sampled from the real rings, which is what keeps the cells on the
-# surface instead of floating beside it.
-
-_HONEY_CELL = 3.45           # mm, checkerboard node spacing
-_HONEY_HALF = 2.2            # mm, half-diagonal (vertex radius) of one cell
-_HONEY_ROUND = 0.55          # mm, corner radius of one cell
-_HONEY_REAR_Y = 41.5         # mm from the nose: rear field starts behind the caps
-_HONEY_WRAP_Y = 119.4        # mm: station of the field's last row
-# Flank reach, as a fraction of the cross-section's arc, apex -> base rim.
-# Measured off the official top view: the outermost opening in each row sits
-# at ~0.91 of the silhouette half-width, and a cell's outer vertex reaches a
-# further 1.95 mm, so the field stops about a millimetre inside the outline.
-# The reach grows only slowly towards the tail, where the section's arc is
-# short and most of it is the rolled shoulder.
-_HONEY_WRAP0 = 0.533         # flank reach at _HONEY_REAR_Y, apex -> base rim
-_HONEY_WRAP1 = 0.588         # flank reach at _HONEY_WRAP_Y
-# The centre channel has no perforation: it is the scroll wheel's slot and the
-# CPI housing.  A capsule down the centreline covers both with a margin, and
-# leaves the two patches flanking the wheel to run back and merge with the
-# rest of the field behind it -- the top view shows one continuous perforation
-# from the caps' rear edge to the tail, parted only by that channel.
-_HONEY_CENTRE = (6.4, 36.0, 72.0)      # radius, y0, y1 (mm)
-_HONEY_PROFILE = 192         # samples per side, crown apex -> base rim
-_HONEY_RIM = 3.0             # mm of bare shell left at the tail's rim
-_HONEY_RIM_Z = 1.5           # mm: below this a ring point is base, not shell
-
+#: Mouse length in mm; normalised coordinates are ``mm / _MM``.
 _MM = _mesh.LENGTH_MM
-_Y0_MM = 63.8                # station of normalised y = 0
+#: Station of normalised y = 0.  The mesh normalises y as ``y/MM - 0.5`` with
+#: its own origin at ``Y_MIN_MM``, so the half-length has to be shifted by that
+#: offset -- dropping it silently slid every station by 0.3 mm.
+_Y0_MM = _MM / 2.0 + _mesh.Y_MIN_MM
 
 
-def _cr_closed(pts, per_seg=6):
-    """Densify a closed polygon of ``(x, z)`` pairs (Catmull-Rom)."""
-    n = len(pts)
-    out = []
-    for i in range(n):
-        p0, p1, p2 = pts[i - 1], pts[i], pts[(i + 1) % n]
-        p3 = pts[(i + 2) % n]
-        for k in range(per_seg):
-            t = k / per_seg
-            t2, t3 = t * t, t * t * t
-            out.append(tuple(
-                0.5 * (2 * p1[c] + (-p0[c] + p2[c]) * t
-                       + (2 * p0[c] - 5 * p1[c] + 4 * p2[c] - p3[c]) * t2
-                       + (-p0[c] + 3 * p1[c] - 3 * p2[c] + p3[c]) * t3)
-                for c in (0, 1)))
-    return out
+def _rim_normal(pts):
+    """Outward normal of a closed hole loop, as ``(nx, 0, nz)``.
 
-
-def _ring_profiles():
-    """Split every ring into two crown-apex -> base-rim profiles.
-
-    Returns ``(ys, pos, neg, len_pos, len_neg)``.  ``pos[i][j]`` is the
-    ``(x, z)`` (mm) at ``j / (_HONEY_PROFILE - 1)`` of the way from the
-    crown apex to the right base rim of ring ``i``; ``neg`` mirrors it on
-    the left.  Both sides of every ring are sampled at the *same* fractions
-    of their own length, so the profiles line up station to station.
+    Newell's area vector for the loop, projected onto XZ (the renderer's
+    whole-cell facing test reads ``nx``/``nz`` only, so the Y component is
+    dropped rather than carried to no effect).  The loop winding out of the
+    extractor is arbitrary, so the sign is fixed by flipping it to point away
+    from the body's vertical axis.
     """
-    ys, pos, neg, lp, ln = [], [], [], [], []
-    for y_norm, ring in _mesh.RINGS:
-        dense = _cr_closed([(x * _MM, z * _MM) for x, z in ring])
-        n = len(dense)
-        segs = [math.dist(dense[i], dense[(i + 1) % n]) for i in range(n)]
-        apex = max(range(n), key=lambda i: dense[i][1])
-        sides = []
-        # Ring points run anticlockwise, so stepping *backwards* from the
-        # apex walks the right flank: keep that one first, to match the
-        # signed-u convention (positive = right).
-        for step in (-1, 1):
-            walk, dist = [], []
-            k, d = apex, 0.0
-            for _ in range(n):
-                walk.append(dense[k])
-                dist.append(d)
-                if step > 0:
-                    d += segs[k]
-                    k = (k + 1) % n
-                else:
-                    k = (k - 1) % n
-                    d += segs[k]
-            # Trim where the shell meets the base plate.  The low rings near
-            # the nose never drop below _HONEY_RIM_Z, so for them there is no
-            # such crossing: trim at the ring's own lowest point instead.
-            # Without that fallback the walk keeps the *whole* closed loop
-            # (crown -> flank -> underside -> flank -> crown), and because
-            # stations are sampled at matching fractions of their own length,
-            # interpolating such a profile against a properly trimmed one
-            # pairs an underside sample with a flank sample -- which pulled
-            # the keycap outlines metres-deep down the flank and, further
-            # back, shrank the profile to a fraction of its real width.
-            cut = min(range(1, len(walk)), key=lambda i: walk[i][1])
-            for i in range(1, cut + 1):
-                if walk[i][1] < _HONEY_RIM_Z:
-                    # Trim to where the shell meets the base plate.
-                    z0, z1 = walk[i - 1][1], walk[i][1]
-                    f = (z0 - _HONEY_RIM_Z) / max(1e-6, z0 - z1)
-                    walk[i] = (walk[i - 1][0] + (walk[i][0] - walk[i - 1][0]) * f,
-                               _HONEY_RIM_Z)
-                    dist[i] = dist[i - 1] + (dist[i] - dist[i - 1]) * f
-                    cut = i
-                    break
-            length = dist[cut]
-            prof = []
-            j = 0
-            for s in range(_HONEY_PROFILE):
-                want = length * s / (_HONEY_PROFILE - 1)
-                while j < cut - 1 and dist[j + 1] < want:
-                    j += 1
-                span = dist[j + 1] - dist[j]
-                f = 0.0 if span <= 0 else (want - dist[j]) / span
-                prof.append((walk[j][0] + (walk[j + 1][0] - walk[j][0]) * f,
-                             walk[j][1] + (walk[j + 1][1] - walk[j][1]) * f))
-            sides.append((prof, length))
-        ys.append(y_norm * _MM + _Y0_MM)
-        pos.append(sides[0][0])
-        neg.append(sides[1][0])
-        lp.append(sides[0][1])
-        ln.append(sides[1][1])
-    return ys, pos, neg, lp, ln
-
-
-_HONEY_YS, _HONEY_POS, _HONEY_NEG, _HONEY_LPOS, _HONEY_LNEG = _ring_profiles()
-
-
-def _ring_span(y_mm):
-    """Index/t of the two rings bracketing station *y_mm*."""
-    ys = _HONEY_YS
-    if y_mm <= ys[0]:
-        return 0, 0.0
-    if y_mm >= ys[-1]:
-        return len(ys) - 2, 1.0
-    for i in range(len(ys) - 1):
-        if ys[i] <= y_mm <= ys[i + 1]:
-            return i, (y_mm - ys[i]) / (ys[i + 1] - ys[i])
-    return len(ys) - 2, 1.0
-
-
-def _surface_pt(y_mm, u_mm):
-    """``(x, z)`` on the shell at station *y_mm*, arc offset *u_mm* (mm).
-
-    *u_mm* is measured from the crown apex; positive rolls down the right
-    flank, negative the left.  Returns ``(x, z, side_length)``.
-    """
-    i, t = _ring_span(y_mm)
-    sides = _HONEY_POS if u_mm >= 0 else _HONEY_NEG
-    lens = _HONEY_LPOS if u_mm >= 0 else _HONEY_LNEG
-    length = lens[i] + (lens[i + 1] - lens[i]) * t
-    frac = min(1.0, abs(u_mm) / length if length else 0.0) * (_HONEY_PROFILE - 1)
-    j = min(_HONEY_PROFILE - 2, int(frac))
-    f = frac - j
-    out = []
-    for c in (0, 1):
-        near = sides[i][j][c] + (sides[i][j + 1][c] - sides[i][j][c]) * f
-        far = sides[i + 1][j][c] + (sides[i + 1][j + 1][c] - sides[i + 1][j][c]) * f
-        out.append(near + (far - near) * t)
-    return out[0], out[1], length
-
-
-def _cell_template():
-    """One cell as a rounded diamond in ``(u, v)`` mm, centred on the origin."""
-    a, r = _HONEY_HALF, _HONEY_ROUND
-    corners = [(a, 0.0), (0.0, a), (-a, 0.0), (0.0, -a)]
-    out = []
-    for k in range(4):
-        cx, cy = corners[k]
-        corners_in = []
-        for other in (corners[k - 1], corners[(k + 1) % 4]):
-            dx, dy = other[0] - cx, other[1] - cy
-            d = math.hypot(dx, dy) or 1.0
-            corners_in.append((dx / d, dy / d))
-        ex, ey = corners_in[0][0] + corners_in[1][0], corners_in[0][1] + corners_in[1][1]
-        ax, ay = cx + ex * r, cy + ey * r          # arc centre
-        t0 = (cx + corners_in[0][0] * r, cy + corners_in[0][1] * r)
-        t1 = (cx + corners_in[1][0] * r, cy + corners_in[1][1] * r)
-        a0 = math.atan2(t0[1] - ay, t0[0] - ax)
-        a1 = math.atan2(t1[1] - ay, t1[0] - ax)
-        da = (a1 - a0 + math.pi) % (2 * math.pi) - math.pi
-        for s in range(4):
-            ang = a0 + da * s / 3
-            out.append((ax + r * math.cos(ang), ay + r * math.sin(ang)))
-    return out
-
-
-_HONEY_TEMPLATE = _cell_template()
-# How far a cell reaches from its node: the corner radius shaves the diamond
-# tips, so this is a little under the 2.2 mm vertex radius, and it -- not
-# ``_HONEY_HALF`` -- is what has to stay inside the sampled shell.
-_HONEY_TIP = max(abs(dv) for _du, dv in _HONEY_TEMPLATE)
-
-
-def _honey_accept(y_mm, u_mm, x_mm, length):
-    """Is a lattice node inside the honeycomb field?
-
-    The node must sit a whole cell radius clear of every edge: a corner that
-    runs past the end of a profile would be clamped onto the base rim and
-    drag the cell out into a sliver (the "fan" at the tail).
-    """
-    if y_mm < _HONEY_REAR_Y:
-        return False
-    t = min(1.0, max(0.0, (y_mm - _HONEY_REAR_Y)
-                      / (_HONEY_WRAP_Y - _HONEY_REAR_Y)))
-    reach = (_HONEY_WRAP0 + (_HONEY_WRAP1 - _HONEY_WRAP0) * t) * length
-    if abs(u_mm) + _HONEY_TIP > reach:
-        return False
-    # Clear of the wheel slot and the CPI housing: the distance from the node
-    # to the channel's spine (x = 0, y0 + r .. y1 - r) is what has to clear.
-    cr, cy0, cy1 = _HONEY_CENTRE
-    spine = min(max(y_mm, cy0 + cr), cy1 - cr)
-    return x_mm ** 2 + (y_mm - spine) ** 2 >= cr * cr
+    nx = nz = 0.0
+    for i, p in enumerate(pts):
+        q = pts[(i + 1) % len(pts)]
+        nx += (p.y - q.y) * (p.z + q.z)
+        nz += (p.x - q.x) * (p.y + q.y)
+    cx = sum(p.x for p in pts) / len(pts)
+    cz = sum(p.z for p in pts) / len(pts)
+    if nx * cx + nz * (cz - _Z_AXIS) < 0.0:
+        nx, nz = -nx, -nz
+    d = math.hypot(nx, nz) or 1.0
+    return nx / d, 0.0, nz / d
 
 
 def build_honeycomb():
-    """Honeycomb openings as loops on the shell (normalised coordinates)."""
-    cell = _HONEY_CELL
-    tip = _HONEY_TIP
-    # Rows run from just behind the keycaps to the tail: the first row is
-    # anchored on the caps' rear edge, one cell tip clear of it so the
-    # openings do not run under the keycap, and the rest follow on the
-    # lattice up to the last row that still leaves the tail rim the reference
-    # views show.  Anchoring on the tail instead moved the front edge by
-    # whatever the phase happened to leave, and the caps' edge is the one
-    # boundary the top view pins down.
-    top = (_HONEY_REAR_Y + tip) + math.floor(
-        (_HONEY_YS[-1] - _HONEY_RIM - 2 * tip - _HONEY_REAR_Y) / cell) * cell
+    """Honeycomb openings as loops on the shell (normalised coordinates).
+
+    The loops are the real perforation rims extracted from the v3 mesh
+    (``aerox5_mesh.RIMS``): the pattern, its pitch, its run from the rear of
+    the keycaps to the tail and the way it wraps the shoulder all come from
+    the model, not from a lattice generated here.  Each entry keeps the shape
+    the renderer expects, ``{"pts", "center", "normal"}``.
+    """
     loops = []
-    for row in range(math.floor((24.0 - top) / cell), 1):
-        v0 = top + row * cell
-        if v0 < 24.0:
+    for rim in _mesh.RIMS:
+        pts = [Point3D(*p) for p in rim]
+        if len(pts) < 3:
             continue
-        off = 0.0 if row % 2 == 0 else cell
-        for i in range(-20, 21):
-            u0 = off + i * 2 * cell
-            x, _z, length = _surface_pt(v0, u0)
-            # The cell's rear tip sits further back, where the flank is
-            # shorter; cull the reach against the tighter of the two.
-            _x, _z, rear = _surface_pt(v0 + tip, u0)
-            length = min(length, rear)
-            if not _honey_accept(v0, u0, x, length):
-                continue
-            pts = []
-            for du, dv in _HONEY_TEMPLATE:
-                x, z, _l = _surface_pt(v0 + dv, u0 + du)
-                pts.append(Point3D(x / _MM, (v0 + dv - _Y0_MM) / _MM, z / _MM))
-            cx, cz, _l = _surface_pt(v0, u0)
-            # Outward surface normal, from the profile tangent (the lattice
-            # is far more reliable than a radial guess where the shell rolls
-            # over the tail and the shoulder).
-            xa, za, _l = _surface_pt(v0, u0 + 1.0)
-            xb, zb, _l = _surface_pt(v0, u0 - 1.0)
-            nx, nz = -(za - zb), (xa - xb)
-            d = math.hypot(nx, nz) or 1.0
-            loops.append({"pts": pts,
-                          "center": Point3D(cx / _MM, (v0 - _Y0_MM) / _MM,
-                                            cz / _MM),
-                          "normal": (nx / d, 0.0, nz / d)})
+        n = len(pts)
+        loops.append({
+            "pts": pts,
+            "center": Point3D(sum(p.x for p in pts) / n,
+                              sum(p.y for p in pts) / n,
+                              sum(p.z for p in pts) / n),
+            "normal": _rim_normal(pts),
+        })
     return loops
 
 

@@ -17,8 +17,8 @@ def test_stations_are_ordered_front_to_back():
 
 def test_shell_bounds_are_realistic():
     a, b, t = mouse3d._interp_station(0.0)
-    # Real proportions of the Aerox 5 (the mesh bakes to 127.6 x 68.2 x
-    # 42.9 mm), length normalised to 1: half-width ~0.266, top height ~0.32
+    # Real proportions of the Aerox 5 (the v3 mesh is 128.2 x 68.4 x 42.0
+    # mm), length normalised to 1: half-width ~0.266, top height ~0.32
     # at the middle.
     assert 0.24 < a < 0.30
     assert 0.28 < t < 0.35
@@ -33,8 +33,11 @@ def test_wireframe_has_rings_and_longitudinals():
 
 
 def test_top_surface_is_highest_at_centre():
+    # x=0.26 stays inside the lookup grid (which ends at +-36 mm, i.e. 0.28);
+    # beyond that the sample clamps to the edge and the test would pass on a
+    # repeated value.
     z_center = mouse3d.top_surface_z(0.0, 0.0)
-    z_edge = mouse3d.top_surface_z(0.34, 0.0)
+    z_edge = mouse3d.top_surface_z(0.26, 0.0)
     assert z_center > z_edge
 
 
@@ -66,25 +69,36 @@ def _hole_station_mm(hole):
     return hole["center"].y * mouse3d._MM + mouse3d._Y0_MM
 
 
+def _median(values):
+    values = sorted(values)
+    n = len(values)
+    return values[n // 2] if n % 2 else 0.5 * (values[n // 2 - 1]
+                                               + values[n // 2])
+
+
 def test_honeycomb_lattice_matches_the_reference():
-    """Measured off the official 1:1 top view: rounded-diamond openings on a
-    staggered lattice, 3.45 mm between nearest neighbours -- a coarse
-    perforation, not a fine mesh."""
+    """The openings are a *coarse* perforation, not a fine mesh: rounded
+    holes a little over 4 mm across, whose neighbours sit ~5 mm apart.  Both
+    numbers are measured off the v3 model's real rims -- the pattern is
+    extracted, not generated, so this pins the extraction rather than a
+    lattice constant."""
     holes = mouse3d.DETAILS["holes"]
     assert holes
-    pitch = mouse3d._HONEY_CELL
-    stations = sorted({round(_hole_station_mm(h), 3) for h in holes})
-    gaps = [b - a for a, b in zip(stations, stations[1:])]
-    assert gaps
-    assert min(gaps) >= pitch - 1e-6
-    # A whole row can be culled locally (the wheel patches, the CPI housing),
-    # so gaps are whole multiples of the pitch rather than exactly one.
-    for gap in gaps:
-        assert abs(gap / pitch - round(gap / pitch)) < 1e-6, gap
-    # ~4 mm across, the corner radius shaving the diamond's tips.
-    dy = [max(p.y for p in _hole_pts(h)) - min(p.y for p in _hole_pts(h))
-          for h in holes]
-    assert 3.5 < max(dy) * mouse3d._MM < 4.4
+    mm = mouse3d._MM
+    ext = []
+    for h in holes:
+        pts = _hole_pts(h)
+        ext.append(max(max(p.x for p in pts) - min(p.x for p in pts),
+                       max(p.y for p in pts) - min(p.y for p in pts),
+                       max(p.z for p in pts) - min(p.z for p in pts)) * mm)
+    assert 3.5 < _median(ext) < 5.5, _median(ext)
+    # Nearest-neighbour spacing between hole centres.
+    centres = [(h["center"].x, h["center"].y, h["center"].z) for h in holes]
+    pitch = []
+    for i, c in enumerate(centres):
+        pitch.append(min(math.dist(c, o) for j, o in enumerate(centres)
+                         if j != i) * mm)
+    assert 4.0 < _median(pitch) < 6.5, _median(pitch)
 
 
 def test_honeycomb_spans_crown_to_flank():
@@ -96,24 +110,27 @@ def test_honeycomb_spans_crown_to_flank():
 
 
 def test_honeycomb_holes_are_uniform_on_the_surface():
-    """The openings are one uniform lattice laid on the shell: every cell
-    spans the same distance along the body, so the perforation never
-    thickens or thins from nose to tail.  What varies in a projected view is
-    the surface wrapping away from the camera, not the cell size."""
+    """The openings are one family of holes, not a mix of sizes: the typical
+    hole spans the same distance along the body everywhere.  What varies in a
+    projected view is the surface wrapping away from the camera, not the hole
+    size.  (A handful of rims are cut short where the perforation meets the
+    silhouette, so this bounds the typical hole rather than all of them.)"""
     holes = mouse3d.DETAILS["holes"]
     spans = [max(p.y for p in _hole_pts(h)) - min(p.y for p in _hole_pts(h))
              for h in holes]
     assert spans
-    assert max(spans) - min(spans) < 1e-9
+    med = _median(spans) * mouse3d._MM
+    assert 3.5 < med < 5.0, med
+    assert max(spans) * mouse3d._MM < 6.0
 
 
 def test_honeycomb_reaches_forward_of_the_body_centre():
     """The perforation is not only the rear field: the two wedges flanking the
     scroll wheel carry it too, well forward of the body centre.
 
-    The fields flanking the scroll wheel start where the keycaps end, 41.5 mm
-    from the nose, so the lattice's first row that whole clears the caps lands
-    at 43.5 mm -- a third of the body forward of the centre (63.8 mm)."""
+    The fields flanking the scroll wheel start where the keycaps end, ~41 mm
+    from the nose, and the first rows sit forward of the body centre (64.1 mm
+    after the normalisation shift)."""
     holes = mouse3d.DETAILS["holes"]
     forward = [h for h in holes if h["center"].y < 0.0]
     assert forward
@@ -121,15 +138,22 @@ def test_honeycomb_reaches_forward_of_the_body_centre():
 
 
 def test_lever_spans_the_thumb_buttons():
-    """The long up/down flick lever sits over both thumb buttons."""
+    """The long up/down flick lever sits over both thumb buttons.
+
+    In the v3 model the lever runs 41-80 mm from the nose while button5
+    covers 41-62.5 mm and button4 63.5-87 mm: the lever spans all of the
+    front button and the front half of the rear one, as on the real mouse."""
     def yspan(key):
         poly = mouse3d.BUTTONS[key][1]
         return min(p.y for p in poly), max(p.y for p in poly)
 
     lo7, hi7 = yspan("button7")
-    spans = [yspan("button4"), yspan("button5")]
-    assert lo7 <= min(lo for lo, _hi in spans) + 0.03
-    assert hi7 >= max(hi for _lo, hi in spans) - 0.03
+    lo5, hi5 = yspan("button5")
+    lo4, hi4 = yspan("button4")
+    assert lo7 <= lo5 + 0.01              # starts with the front button
+    assert hi7 >= hi5                     # covers the front button entirely
+    assert lo7 <= lo4                     # reaches into the rear button
+    assert hi7 >= lo4 + 0.5 * (hi4 - lo4)  # and past its midpoint
 
 
 def test_thumb_buttons_are_adjacent():
@@ -141,11 +165,16 @@ def test_thumb_buttons_are_adjacent():
 
 
 def test_click_panels_are_symmetric():
+    """The two keycaps mirror each other about the centreline.
+
+    The model's own right-hand cap is wider (its source breaks the flank
+    asymmetrically), so both panels are drawn from the *left* one's part
+    line, mirrored -- the pair is symmetric to within the resampling."""
     _l, left = mouse3d.BUTTONS["button1"]
     _l, right = mouse3d.BUTTONS["button2"]
     lx = sum(p.x for p in left) / len(left)
     rx = sum(p.x for p in right) / len(right)
-    assert abs(lx + rx) < 1e-6  # mirrored about x=0
+    assert abs(lx + rx) < 0.03, abs(lx + rx)
 
 
 def test_click_panels_converge_toward_the_nose():
@@ -168,13 +197,18 @@ def test_click_panels_converge_toward_the_nose():
     widest = max(prof)
     # the leading edge is much narrower than the widest point
     assert front_w < 0.5 * widest
-    # and the width never decreases from the nose toward the widest point.
-    # The outline is a snapped curve, so a band's maximum wobbles by a
-    # fraction of a percent; a real pinch is an order of magnitude larger.
+    # and the width grows from the nose toward the widest point.  The outline
+    # is the real panel edge snapped onto the shell, so it carries the shell's
+    # own sub-millimetre bumps; smooth over a few bands and the taper is
+    # monotone.  A real pinch is an order of magnitude larger than the wobble
+    # this smoothing leaves.
     peak = max(range(len(prof)), key=lambda i: prof[i])
-    seq = prof[:peak + 1]
-    assert all(seq[i] <= seq[i + 1] + 0.02 * widest
-               for i in range(len(seq) - 1))
+    sm = []
+    for i in range(peak + 1):
+        lo_i, hi_i = max(0, i - 4), min(len(prof), i + 5)
+        sm.append(max(prof[lo_i:hi_i]))
+    assert all(sm[i] <= sm[i + 1] + 0.02 * widest
+               for i in range(len(sm) - 1))
 
 
 def test_click_panels_wrap_down_the_nose():
@@ -189,11 +223,14 @@ def test_click_panels_wrap_down_the_nose():
 
 
 def test_keycaps_meet_at_centreline_before_the_wheel():
-    """In front of the wheel slot the two keycaps meet at the centreline."""
-    _label, poly = mouse3d.BUTTONS["button1"]
-    # clearly forward of the wheel slot: the inner edge is on the centreline
-    front = [abs(p.x) for p in poly if p.y < -0.44]
-    assert front and min(front) < 0.025
+    """In front of the wheel slot the two keycaps hug the centre channel
+    rather than splaying over the shell: the v3 model leaves a ~9 mm housing
+    down the middle for the wheel and the CPI button, and the caps' inner
+    edges run either side of it, ~4.5 mm out from the centreline."""
+    for key in ("button1", "button2"):
+        _label, poly = mouse3d.BUTTONS[key]
+        front = [abs(p.x) for p in poly if p.y < -0.44]
+        assert front and min(front) < 0.05, (key, min(front))
 
 
 def test_keycaps_clear_the_wheel_and_dpi():
@@ -220,11 +257,33 @@ def test_keycaps_clear_the_wheel_and_dpi():
 
 
 def test_keycaps_have_split_channel_after_the_wheel():
-    """After the wheel the two caps sit either side of a centre channel, not
-    on the centreline (the gap opens from the wheel front onward)."""
-    _label, poly = mouse3d.BUTTONS["button1"]
-    channel = [abs(p.x) for p in poly if -0.40 < p.y < -0.09]
-    assert channel and min(channel) > 0.03
+    """After the wheel the two caps sit either side of a centre channel.
+
+    It stays open the whole way back -- neither cap ever crosses onto the
+    other's side -- but it pinches to a hairline between the wheel well and
+    the CPI pill, where the v3 model's two panels abut along a narrow crowned
+    spine, before opening again around the pill."""
+    left = mouse3d.BUTTONS["button1"][1]
+    right = mouse3d.BUTTONS["button2"][1]
+    # the panels never merge onto the centreline
+    assert max(p.x for p in left) < min(p.x for p in right)
+
+    mm = mouse3d._MM
+
+    def station(p):
+        return p.y * mm + mouse3d._Y0_MM
+
+    for key in ("button1", "button2"):
+        _label, poly = mouse3d.BUTTONS[key]
+        channel = [(station(p), abs(p.x) * mm) for p in poly]
+        assert [x for s, x in channel if 12.0 < s < 53.0]
+        # the pinch between the wheel well (ends ~37 mm) and the CPI pill
+        # (starts ~46 mm) is well under a millimetre a side
+        neck = [x for s, x in channel if 40.5 < s < 44.5]
+        assert neck and min(neck) < 0.5, (key, min(neck))
+        # alongside the wheel well proper the split is several mm wide
+        wide = [x for s, x in channel if 18.0 < s < 36.0]
+        assert wide and min(wide) > 3.0, (key, min(wide))
 
 
 def test_project_returns_finite_pairs():
@@ -369,7 +428,9 @@ def test_render_draws_scene_and_reports_geometry():
 def test_side_buttons_stay_on_the_flank():
     """Side-button corners must not wrap over the crown: the shell gets
     lower towards the nose, so heights are expressed as fractions of the
-    local shell height and must keep a margin from the top ridge."""
+    local shell height and must keep a margin from the top ridge.  The lever
+    in the v3 model rides high (0.92 of the local height), so the margin is
+    only a few percent -- still well clear of the ridge."""
     for key in ("button4", "button5", "button7", "button8", "button9"):
         _label, poly = mouse3d.BUTTONS[key]
         for p in poly:
@@ -378,15 +439,20 @@ def test_side_buttons_stay_on_the_flank():
             # reads over the wireframe; allow that tiny epsilon.
             assert zb - 0.004 <= p.z <= zt + 1e-9, (key, p)
             zf = (p.z - zb) / max(1e-9, zt - zb)
-            assert zf <= 0.9, (key, p)
+            assert zf <= 0.95, (key, p)
 
 
 def test_click_panels_clear_side_buttons():
-    """The click keycaps live on the top surface: every point sits above the
-    shell mid-height, so they never spill onto the side-button flank."""
+    """The click keycaps live on the top surface: behind the nose -- the only
+    stretch where the side buttons reach -- every point sits above the shell
+    mid-height, so they never spill onto the side-button flank.  Forward of
+    that the cap legitimately wraps down the low nose, where there is nothing
+    to collide with."""
     for key in ("button1", "button2"):
         _label, poly = mouse3d.BUTTONS[key]
         for p in poly:
+            if p.y < -0.30:
+                continue
             _a, zb, zt = mouse3d._interp_station(p.y)
             assert p.z > zb + 0.55 * (zt - zb), (key, p)
 

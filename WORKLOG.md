@@ -537,3 +537,52 @@ neighbours are all still empty during the first iteration; it now averages over
 the finite ones and leaves real holes to the next pass or the global fallback.
 Numerically a no-op — the regenerated mesh is unchanged — but the build is
 warning-clean under `-W error::RuntimeWarning`.
+
+---
+
+## 2026-10-04 — the click panels are a mirrored pair; the centre spine is filled
+
+Reported from the app's top view: the two keycaps did not match -- the right
+one was visibly larger -- and the centre strip between the wheel well and the
+CPI button was not filled in properly.
+
+**The right cap was traced from a wider shoulder.**  `cap_plan_curves` gave
+each panel its own outer edge, and the two groups in the source model are *not*
+mirrored: the model's flank break is asymmetric (`zlim` ramps on one side,
+constant on the other -- see `aerox5_3d_files/model.py`), so the right cap's
+part line runs out to 32.09 mm from the centreline while the left one stops at
+27.09 mm, a difference of up to 6 mm through the shoulder (y 10-26 mm).  The
+left panel was the one that matches the part, so **both panels are now drawn
+from the left one's plan curve, mirrored about the centreline**; heights are
+still taken per side from that side's own top faces, so each outline sits on
+the surface underneath it.  The right cap is now 27.08 mm -- the pair is
+symmetric to the resampling (the `_smooth_closed` loop centres differ by
+~0.001).
+
+**The spine between the well and the CPI pill was not traced.**  The two panels
+do not simply flank the centre all the way back: between the wheel well (ends
+~37.5 mm) and the CPI pocket (~46 mm) they *abut* along a narrow crowned strip
+-- the v3 mesh splits it between the two groups, each one's top faces reaching
+to within a few tenths of a millimetre of the centreline (|x| <= 0.81 mm over
+y 39.45-45.02).  That strip is thinner than `CAP_MODE_WIN` (0.9 mm), the
+majority filter that exists to take the *outer* boundary's lattice feather off,
+so it was erased from the mask and the traced inner edge ran straight past it
+at ~5 mm, leaving only a 2 mm spike where a few cells survived.
+`cap_top_mask` is now split into `cap_top_raw` + the filter, and
+`cap_plan_curves` reads the spine off the *unfiltered* mask
+(`spine_halfwidth`: the cap-top cell nearest the centreline in each row, `inf`
+where the row has none -- i.e. where the cap's real boundary is its own well
+wall).  The inner edge therefore follows the part: ~5.0 mm along the well,
+pinching to ~0.2 mm a side over the spine, and back out around the pill.  The
+smoothed outline's tightest point is a 0.13 mm channel -- the panels never
+cross the centreline (no point of either cap lies on the other's side).
+
+**Test.**  `test_keycaps_have_split_channel_after_the_wheel` asserted the
+channel stayed wider than ~1 mm (it was written against the 2 mm spike).  It
+now asserts what the part does: the panels never merge (left cap entirely left
+of the right), the channel beside the wheel is several mm wide, and the pinch
+between the well and the pill is under 0.5 mm a side.
+`test_click_panels_are_symmetric`'s docstring no longer claims "near-mirrored".
+
+**66 tests pass.**
+
