@@ -171,8 +171,51 @@ def _flat_flags(plan):
 def _all_flags(plan):
     flags = []
     for step in plan.steps:
+        if callable(step):          # a library write carries no CLI flags
+            continue
         flags.extend(step[0::2])
     return flags
+
+
+@pytest.fixture
+def cli_only(monkeypatch):
+    """Force every plan step onto the CLI (no library writes).
+
+    The library path is a callable step, which has no argv to assert on, so the
+    pure-argv ordering tests pin the fallback explicitly.
+    """
+    monkeypatch.setattr(dc, "USE_LIBRARY_WRITES", False)
+    return dc
+
+
+@pytest.fixture
+def lib_on(monkeypatch):
+    """Force the library write path on, whatever the environment says."""
+    monkeypatch.setattr(dc, "USE_LIBRARY_WRITES", True)
+    return dc
+
+
+class _FakeMouse:
+    """Minimal stand-in for ``rivalcfg.mouse.Mouse`` (library write path)."""
+
+    def __init__(self, fail_on=None):
+        self.calls = []
+        self.closed = False
+        self.fail_on = fail_on
+
+    def set_sensitivity(self, values, selected_preset=None):
+        self.calls.append(("set_sensitivity", list(values), selected_preset))
+        if self.fail_on == "set_sensitivity":
+            raise OSError("[Errno 19] No such device")
+
+    def save(self):
+        self.calls.append(("save",))
+        if self.fail_on == "save":
+            raise OSError("save failed")
+
+    def close(self):
+        self.closed = True
+        self.calls.append(("close",))
 
 
 def test_lighting_plan_canonical_order(caps):
@@ -233,7 +276,7 @@ def test_build_buttons_arg_partial_mapping_does_not_raise(caps):
 # Full plan
 # ---------------------------------------------------------------------------
 
-def test_full_plan_order(caps):
+def test_full_plan_order(caps, cli_only):
     state = {
         "dpi": [800, 1600], "polling": 1000,
         "zones": {"z1_color": "ff0000"}, "reactive": "off",
@@ -252,6 +295,130 @@ def test_full_plan_order(caps):
     assert flags[-1] == "--rainbow-effect"
     # Every phase is its own invocation.
     assert all(len(step) > 0 for step in plan.steps)
+
+
+def test_full_plan_library_dpi_step_first_without_cli_flag(caps, lib_on):
+    """On the library path the DPI write is step 1 and carries no CLI flag."""
+    plan = dc.build_full_plan(
+        caps,
+        {"dpi": [800, 1600], "dpi_active_index": 1, "save": False, "polling": 1000},
+    )
+    assert callable(plan.steps[0]), "DPI write must be the leading library step"
+    assert "--sensitivity" not in _all_flags(plan)
+    # The rest still batches as one CLI invocation, polling first.
+    flags = _all_flags(plan)
+    assert flags[0] == "--polling-rate"
+
+
+def test_full_plan_no_dpi_leaves_no_library_step(caps):
+    plan = dc.build_full_plan(caps, {"polling": 500})
+    assert plan.steps and not any(callable(s) for s in plan.steps)
+
+
+# ---------------------------------------------------------------------------
+# Sensitivity library step (the only way to select a DPI preset)
+# ---------------------------------------------------------------------------
+
+def test_library_step_writes_presets_and_selected_preset(lib_on):
+    mouse = _FakeMouse()
+    step = dc.sensitivity_library_step([400, 3200], 1, mouse_factory=lambda: mouse)
+    ok, out = step()
+    assert ok is True and out == ""
+    assert mouse.calls[0] == ("set_sensitivity", [400, 3200], 1)
+    assert ("save",) in mouse.calls
+    assert mouse.closed is True
+
+
+def test_library_step_preset_byte_matches_handler_contract(lib_on):
+    """Selected preset 1 must land as ``0x1`` in the packet's second byte.
+
+    The packet is built by rivalcfg's own handler, from the device's real
+    profile, so this pins the *contract* -- and shows what the CLI can never
+    send, since the CLI's only argument is the DPI list.
+    """
+    from rivalcfg.handlers import multidpi_range_choice as h
+
+    setting_info = _aerox5_profile()["settings"]["sensitivity"]
+    if not setting_info.get("output_choices"):
+        pytest.skip("rivalcfg library not importable")
+
+    mouse = _FakeMouse()
+    dc.sensitivity_library_step([400, 3200], 1, mouse_factory=lambda: mouse)()
+    _, values, selected = mouse.calls[0]
+
+    packet = h.process_value(setting_info, values, selected_preset=selected)
+    assert packet[0] == 2                      # preset count
+    assert packet[1] == 1                      # selected preset
+    # The CLI path sends no selected_preset at all, and the handler then falls
+    # back to first_preset -- i.e. it drags the mouse back to preset 1.
+    cli_packet = h.process_value(setting_info, "400,3200")
+    assert cli_packet[1] == setting_info["first_preset"]
+
+
+def test_library_step_save_false_skips_save(lib_on):
+    mouse = _FakeMouse()
+    ok, _ = dc.sensitivity_library_step([800], 0, save=False,
+                                        mouse_factory=lambda: mouse)()
+    assert ok is True
+    assert ("save",) not in mouse.calls
+    assert mouse.closed is True
+
+
+def test_library_step_never_raises_on_missing_device(lib_on):
+    def factory():
+        raise OSError("[Errno 19] No such device")
+
+    ok, out = dc.sensitivity_library_step([800], 0, mouse_factory=factory)()
+    assert ok is False
+    assert "turned on" in out
+
+
+def test_library_step_closes_mouse_when_set_fails(lib_on):
+    mouse = _FakeMouse(fail_on="set_sensitivity")
+    ok, out = dc.sensitivity_library_step([800], 0, mouse_factory=lambda: mouse)()
+    assert ok is False and "No such device" in out
+    assert mouse.closed is True
+
+
+def test_library_step_save_failure_is_reported(lib_on):
+    mouse = _FakeMouse(fail_on="save")
+    ok, out = dc.sensitivity_library_step([800], 0, mouse_factory=lambda: mouse)()
+    assert ok is False and "save failed" in out
+    assert mouse.closed is True
+
+
+def test_library_step_disabled_returns_none(monkeypatch):
+    monkeypatch.setattr(dc, "USE_LIBRARY_WRITES", False)
+    assert dc.sensitivity_library_step([800], 0) is None
+
+
+def test_library_step_no_values_returns_none():
+    assert dc.sensitivity_library_step([], 0) is None
+
+
+def test_add_sensitivity_falls_back_to_cli_argv(monkeypatch):
+    monkeypatch.setattr(dc, "USE_LIBRARY_WRITES", False)
+    plan = dc.add_sensitivity(dc.ApplyPlan("Sensitivity"), [400, 800], 1)
+    assert plan.steps == [["--sensitivity", "400,800"]]
+
+
+def test_add_sensitivity_uses_library_when_available(monkeypatch):
+    monkeypatch.setattr(dc, "USE_LIBRARY_WRITES", True)
+    plan = dc.add_sensitivity(dc.ApplyPlan("Sensitivity"), [400, 800], 1)
+    assert len(plan.steps) == 1 and callable(plan.steps[0])
+
+
+def test_plan_add_keeps_callable_step():
+    def step():
+        return True, ""
+
+    plan = dc.ApplyPlan("x").add(step).add(["--polling-rate", "1000"])
+    assert plan.steps[0] is step
+    assert plan.steps[1] == ["--polling-rate", "1000"]
+
+
+def test_plan_add_ignores_empty():
+    assert len(dc.ApplyPlan("x").add(None).add([])) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +509,58 @@ def test_queue_stops_on_first_failure_and_reports_step():
     assert calls == [["a"], ["b"]]
     assert results == [(False, "bad thing")]
     assert any(kind == "error" and "b" in msg for kind, msg in statuses)
+    q.stop()
+
+
+def test_queue_runs_a_callable_step_before_argv_steps():
+    """A library step is just another step: it runs in order, on the worker."""
+    calls = []
+
+    def runner(argv):
+        calls.append(list(argv))
+        return True, ""
+
+    def library_step():
+        calls.append("library")
+        return True, ""
+
+    q = dc.CommandQueue(runner, debounce_ms=0)
+    done = []
+    plan = dc.ApplyPlan("t", [library_step, ["--polling-rate", "1000"]],
+                        on_done=lambda ok, out: done.append(ok))
+    q.enqueue(plan)
+    assert q.wait_idle(5)
+    assert calls == ["library", ["--polling-rate", "1000"]]
+    assert done == [True]
+    q.stop()
+
+
+def test_queue_reports_callable_step_failure():
+    def fail():
+        return False, "no device"
+
+    q = dc.CommandQueue(lambda argv: (True, ""), debounce_ms=0)
+    statuses = []
+    q.set_status_callback(lambda kind, msg: statuses.append((kind, msg)))
+    plan = dc.ApplyPlan("Sensitivity", [fail],
+                        on_done=lambda ok, out: statuses.append(("done", out)))
+    q.enqueue(plan)
+    assert q.wait_idle(5)
+    assert ("error", "fail: no device") in statuses
+    assert ("done", "no device") in statuses
+    q.stop()
+
+
+def test_queue_reports_a_raising_callable_step():
+    def boom():
+        raise RuntimeError("kaboom")
+
+    q = dc.CommandQueue(lambda argv: (True, ""), debounce_ms=0)
+    statuses = []
+    q.set_status_callback(lambda kind, msg: statuses.append((kind, msg)))
+    q.enqueue(dc.ApplyPlan("Sensitivity", [boom]))
+    assert q.wait_idle(5)
+    assert any(kind == "error" and "kaboom" in msg for kind, msg in statuses)
     q.stop()
 
 
@@ -472,6 +691,7 @@ def test_migrate_v1_profile():
     assert out["light_effect"] == "breath"
     assert "macro_cps" not in out
     assert out["dpi_values"] == [400, 800]
+    assert out["dpi_active_index"] == 0        # v1 has no active preset
 
 
 def test_migrate_invalid_profile_never_raises():
@@ -480,3 +700,12 @@ def test_migrate_invalid_profile_never_raises():
     assert out["schema"] == 2
     # Bad numbers fall back rather than crash.
     assert out["polling_hz"] == 1000
+    assert out["dpi_active_index"] == 0
+
+
+def test_migrate_keeps_active_dpi_preset():
+    out = dc.migrate_profile({"dpi_values": [400, 800, 1600], "dpi_active_index": 2})
+    assert out["dpi_active_index"] == 2
+    # Garbage falls back to the first preset rather than crashing the page.
+    out = dc.migrate_profile({"dpi_values": [400, 800], "dpi_active_index": "x"})
+    assert out["dpi_active_index"] == 0

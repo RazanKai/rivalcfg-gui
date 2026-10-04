@@ -50,8 +50,8 @@ msgid "Unexpected error"
 msgstr "Beklenmeyen hata"
 
 #: rivalcfg_gui.py:437
-msgid "DPI Settings"
-msgstr "DPI Ayarları"
+#~ msgid "DPI Settings"
+#~ msgstr "DPI Ayarları"
 
 #: rivalcfg_gui.py:455
 msgid "Preset"
@@ -67,8 +67,8 @@ msgid "RESET"
 msgstr "SIFIRLA"
 
 #: rivalcfg_gui.py:529
-msgid "Polling Rate"
-msgstr "Yenileme Hızı"
+#~ msgid "Polling Rate"
+#~ msgstr "Yenileme Hızı"
 
 #: rivalcfg_gui.py:547 rivalcfg_gui.py:551
 #, python-brace-format
@@ -205,8 +205,8 @@ msgid "Forward"
 msgstr "İleri"
 
 #: rivalcfg_gui.py:856 rivalcfg_gui.py:1546 rivalcfg_gui.py:1895
-msgid "DPI"
-msgstr "DPI"
+#~ msgid "DPI"
+#~ msgstr "DPI"
 
 #: rivalcfg_gui.py:1082
 msgid "Connected Devices"
@@ -350,8 +350,8 @@ msgid "Factory Reset"
 msgstr "Fabrika Ayarlarına Döndür"
 
 #: rivalcfg_gui.py:1547 rivalcfg_gui.py:1896
-msgid "POLLING"
-msgstr "YENİLENME"
+#~ msgid "POLLING"
+#~ msgstr "YENİLENME"
 
 #: rivalcfg_gui.py:1548 rivalcfg_gui.py:1897
 msgid "RGB"
@@ -567,3 +567,41 @@ msgstr "Hata Bildir"
 
 #~ msgid "DPI (B6)"
 #~ msgstr "DPI (B6)"
+
+#: rivalcfg_gui.py
+msgid "Sensitivity"
+msgstr "Hassasiyet"
+
+#: rivalcfg_gui.py
+msgid "SENSITIVITY"
+msgstr "HASSASİYET"
+
+#: rivalcfg_gui.py
+msgid "DPI PRESETS"
+msgstr "DPI ÖN AYARLARI"
+
+#: rivalcfg_gui.py
+msgid "POLLING RATE"
+msgstr "YOKLAMA HIZI"
+
+#: rivalcfg_gui.py
+#, python-brace-format
+msgid "App preset: {n} — {value} DPI"
+msgstr "Uygulama ön ayarı: {n} — {value} DPI"
+
+#: rivalcfg_gui.py
+msgid "Select this preset as the active DPI (sent to the mouse on Apply)"
+msgstr "Bu ön ayarı etkin DPI olarak kullan (Uygula'da fareye gönderilir)"
+
+#: rivalcfg_gui.py
+msgid "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
+msgstr "Uygulamanın ayarlayacağı değer. Farenin kendi DPI düğmesi geri bildirilmez, bu yüzden bu değer eski olabilir."
+
+#~ #: rivalcfg_gui.py
+#~ #, python-brace-format
+#~ msgid "Active: DPI {n} — {value}"
+#~ msgstr "Etkin: DPI {n} — {value}"
+
+#~ #: rivalcfg_gui.py
+#~ msgid "Use this preset as the active DPI"
+#~ msgstr "Bu ön ayarı etkin DPI olarak kullan"

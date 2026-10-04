@@ -5,8 +5,7 @@ A Linux desktop configuration tool for SteelSeries mice (via the `rivalcfg` CLI)
 
 ## Features
 
-- **DPI Settings** — up to 5 adjustable presets via sliders (range/step/preset count read from the device profile, e.g. 200–8500 Rival 3, 100–18000 Aerox 5 Wireless)
-- **Polling Rate** — choices taken from the device profile (typically 125 / 250 / 500 / 1000 Hz)
+- **Sensitivity** — DPI presets and polling rate on one page: up to 5 adjustable presets via sliders (range/step/preset count read from the device profile, e.g. 200–8500 Rival 3, 100–18000 Aerox 5 Wireless), a radio marking the **active preset**, and the polling choices taken from the device profile (typically 125 / 250 / 500 / 1000 Hz). The active preset is selected on the mouse through the `rivalcfg` Python API on Apply — the CLI cannot select one. The readout shows what the app will set: the mouse's own DPI button is not reported back by the hardware, so it is not a live reading
 - **RGB Lighting** — one capability-driven layout: per-zone colors with a strip preview, a **standalone reactive (click-flash) row**, a **wake lighting** dropdown, and a **rainbow toggle always sent last**. Works for both the Aerox family and the Rival 3 class
 - **Button Mapping** — an interactive **3D wireframe** of the mouse (Aerox 5) with clickable button facets, human-readable assignment chips, and assignment popovers for mouse buttons, DPI cycle, scroll, disable, **keyboard keys**, and **multimedia keys**. Switch between 3D, top and left-side views
 - **Colour picker** — a built-in HSV gradient + hue strip + **hex entry** popover (no OS colour dialog), so any exact LED colour can be entered directly

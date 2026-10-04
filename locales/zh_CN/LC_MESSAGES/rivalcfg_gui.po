@@ -50,8 +50,8 @@ msgid "Unexpected error"
 msgstr "意外错误"
 
 #: rivalcfg_gui.py:437
-msgid "DPI Settings"
-msgstr "DPI 设置"
+#~ msgid "DPI Settings"
+#~ msgstr "DPI 设置"
 
 #: rivalcfg_gui.py:455
 msgid "Preset"
@@ -67,8 +67,8 @@ msgid "RESET"
 msgstr "重置"
 
 #: rivalcfg_gui.py:529
-msgid "Polling Rate"
-msgstr "轮询率"
+#~ msgid "Polling Rate"
+#~ msgstr "轮询率"
 
 #: rivalcfg_gui.py:547 rivalcfg_gui.py:551
 #, python-brace-format
@@ -205,8 +205,8 @@ msgid "Forward"
 msgstr "前进"
 
 #: rivalcfg_gui.py:856 rivalcfg_gui.py:1546 rivalcfg_gui.py:1895
-msgid "DPI"
-msgstr "DPI"
+#~ msgid "DPI"
+#~ msgstr "DPI"
 
 #: rivalcfg_gui.py:1082
 msgid "Connected Devices"
@@ -350,8 +350,8 @@ msgid "Factory Reset"
 msgstr "恢复出厂设置"
 
 #: rivalcfg_gui.py:1547 rivalcfg_gui.py:1896
-msgid "POLLING"
-msgstr "轮询"
+#~ msgid "POLLING"
+#~ msgstr "轮询"
 
 #: rivalcfg_gui.py:1548 rivalcfg_gui.py:1897
 msgid "RGB"
@@ -567,3 +567,41 @@ msgstr "报告错误"
 
 #~ msgid "DPI (B6)"
 #~ msgstr "DPI (B6)"
+
+#: rivalcfg_gui.py
+msgid "Sensitivity"
+msgstr "灵敏度"
+
+#: rivalcfg_gui.py
+msgid "SENSITIVITY"
+msgstr "灵敏度"
+
+#: rivalcfg_gui.py
+msgid "DPI PRESETS"
+msgstr "DPI 预设"
+
+#: rivalcfg_gui.py
+msgid "POLLING RATE"
+msgstr "轮询率"
+
+#: rivalcfg_gui.py
+#, python-brace-format
+msgid "App preset: {n} — {value} DPI"
+msgstr "应用预设：{n} — {value} DPI"
+
+#: rivalcfg_gui.py
+msgid "Select this preset as the active DPI (sent to the mouse on Apply)"
+msgstr "将此预设设为当前 DPI（点击“应用”时发送到鼠标）"
+
+#: rivalcfg_gui.py
+msgid "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
+msgstr "应用将要设置的值。鼠标自身的 DPI 按钮不会回传，因此这里可能已过时。"
+
+#~ #: rivalcfg_gui.py
+#~ #, python-brace-format
+#~ msgid "Active: DPI {n} — {value}"
+#~ msgstr "当前: DPI {n} — {value}"
+
+#~ #: rivalcfg_gui.py
+#~ msgid "Use this preset as the active DPI"
+#~ msgstr "将此预设设为当前 DPI"

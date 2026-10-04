@@ -586,3 +586,161 @@ between the well and the pill is under 0.5 mm a side.
 
 **66 tests pass.**
 
+---
+
+## 2026-10-04 — DPI and Polling become one Sensitivity page, with an active preset
+
+Requested: the DPI and Polling pages each held one short card and left most of
+the page empty; they are now one **SENSITIVITY** page holding both sections in
+one card, and each DPI row carries a radio that marks which preset is the
+active one.
+
+**Merge.**  `create_dpi_page()` + `create_polling_page()` are replaced by
+`create_sensitivity_page()`; the nav entry `("sensitivity", _("SENSITIVITY"))`
+replaces the two former entries, and `RIVALCFG_GUI_START_PAGE=dpi|polling` is
+mapped onto it so the dev aid keeps working.  The two sections keep their own
+capability-driven construction (DPI rows from `caps.dpi_*`, polling radios from
+`caps.polling_choices`) and one **APPLY** now sends both as a single
+`ApplyPlan` — `--sensitivity` then `--polling-rate`, the same relative order
+`build_full_plan` uses.  **RESET** restores both sections to their defaults.
+
+**Active preset.**  Each DPI row gained a label-less `Gtk.RadioButton` at its
+left edge (the delete button moved to the row's right end).  The choice is
+app-side only — `rivalcfg` is write-only and its CLI never exposes the
+multidpi handler's `selected_preset`, so the mouse's live CPI stage cannot be
+read back and is not what the radio shows.  It is stored in the profile as
+`dpi_active_index` (`migrate_profile` copies it, defaulting to 0) and drives
+**Hyprland mouse sync**, which previously always used preset 1: `on_apply_*`
+and `apply_all_to_device()` now call `_sync_hyprland_to_active_dpi()`, and
+picking a radio re-syncs when auto-apply and Hyprland sync are both on.
+
+Rebuilds are signal-safe: `rebuild_dpi_ui()` holds `_dpi_selecting` for the
+whole build, so the programmatic `set_active()` calls cannot look like a user
+selection; deleting a preset shifts `dpi_active_index` down when the hole is
+above it; loading a profile clamps the stored index into range.
+
+**Test.**  A radio, and the readout under the rows (`Active: DPI 1 — 400`),
+were verified out of tree: page build, click, slider edit, add/delete, and a
+profile round trip (including a clamped out-of-range index), plus the merged
+apply plan and the reset path.  `test_migrate_keeps_active_dpi_preset` covers
+the new profile key.  **67 tests pass.**
+
+**Note (pre-existing).**  The RGB page's minimum width is 1017 px, so the
+window's content needs 1229 px; below that the right edge of *every* page is
+clipped rather than scrolled (`stack_scroll` is `NEVER`/`AUTOMATIC`).  At the
+app's 1280 px default this is invisible, but a narrowly tiled window cuts the
+row's delete buttons.  Unchanged here — recorded so it is not mistaken for new.
+
+## 2026-10-04 (cont.) — the active DPI preset is now actually sent (library write)
+
+Reported: *"if i change dpi on the app it doesnt change it on the mouse. if i
+change it on the mouse with the dpi button it doesnt update on the app."*
+Both directions were investigated; one of them is fixable and now is.
+
+**The packet, and what the CLI can and cannot send.**  The Aerox 5's
+sensitivity write is `[count, selected_preset, dpi_codes…]`, confirmed by
+calling the handler directly —
+
+```
+multidpi_range_choice.process_value(si, [400, 3200], selected_preset=1)
+  -> 0x02, 0x01, 0x04, 0x17        # count=2, selected preset=1
+```
+
+`multidpi_range_choice.add_cli_option()` only ever parses the DPI *list*, and
+`Mouse.__getattr__._exec_command()` calls
+`process_value(setting_info, *args)` with the single CLI argument, so
+`selected_preset` falls through to `None` and the handler substitutes
+`first_preset`.  **Every `--sensitivity` invocation therefore drags the mouse
+back to preset 1** — rivalcfg's own docs say as much ("When you set the
+sensitivity through the CLI, the selected preset always back to the first
+one").  The previous entry's claim that the radio "is app-side only" was right
+about the CLI and wrong about the API: `mouse.set_sensitivity(values,
+selected_preset)` reaches the same byte.
+
+**The mouse → app direction has no path at all.**  `sensitivity` declares
+`readback_length: 64`, but the live readback is an **ACK, not state**: 64 zero
+bytes with the command byte `0x6d` echoed back.  Only `battery_level`
+(2-byte response, real `level`/`is_charging` decoders) is a query, and the
+profile exposes no DPI query command.  The hardware DPI button is
+unobservable from the host, in this app or any other that goes through
+rivalcfg.  Battery polls round-tripping every 60 s do prove the interface
+works, so the write path was never the problem.
+
+**Seam.**  `ApplyPlan.steps` was argv-only, so a library call could not be a
+plan step.  `Step` is now `Union[list[str], Callable[[], tuple[bool, str]]]`,
+`ApplyPlan.add()` keeps a callable as-is, and `CommandQueue._execute()` calls
+it on the same single-writer worker (with its own `try/except`, since a step
+must never kill the queue).  On top of that:
+
+* `sensitivity_library_step(values, active_index, save, mouse_factory)` opens
+  via `rivalcfg.get_first_mouse()` — matching the CLI runner, which never
+  passes `--device` — calls `set_sensitivity`, then `save()` unless told not
+  to, and always `close()`s.  It **never raises**: a missing mouse, a `set_*`
+  error and an import failure all become `(False, message)`, so the failure
+  surfaces in the status bar like any CLI error.
+* `add_sensitivity(plan, values, active_index, save)` is the single entry point
+  for all three DPI write paths (page APPLY, auto-apply, Apply-all), falling
+  back to `["--sensitivity", …]` when the library is unavailable.
+* `USE_LIBRARY_WRITES` (env `RIVALCFG_GUI_FORCE_CLI=1`) forces the CLI
+  everywhere.  This is the escape hatch for the one new risk: the in-process
+  HID write has no equivalent of the subprocess runner's 30 s timeout, so a
+  wedged device could stall the queue.
+
+`build_full_plan()` now emits the DPI write as its **own first step**, ahead of
+the polling/buttons/zones batch — the preset needs the library, the rest is
+happier as one CLI invocation.  Cost: one extra operation per Apply-all.
+`--no-save` is honoured via the explicit `save=` argument (the library path
+bypasses the GUI runner that appends the flag).
+
+**UI honesty (not a fix — a correction).**  The readout reads *"App preset: N —
+<value> DPI"* with a tooltip saying the mouse's DPI button is not reported
+back, and the radio tooltip says the choice is sent on Apply.  Picking a radio
+still writes nothing on its own: with auto-apply off it is recorded and sent
+on APPLY, with auto-apply on it switches the mouse immediately — the
+no-writes-without-consent rule (`README.md:18`) is intact.  Also fixed
+`on_hyprland_sync_toggled()`, which still fed the sync from `dpi_values[0]`
+instead of the active preset — a leftover from before the radio existed.
+
+**i18n.**  Three new msgids (readout, radio tooltip, readout tooltip) in all 10
+catalogs; the two superseded ones are now `#~` obsolete.  `msgfmt --check`
+passes everywhere and the compiled `.mo`s were re-verified by resolving each
+string through `gettext.translation`.
+
+**Tests.**  **84 pass** (from 67): library step (`set_sensitivity` args,
+`save()`/skip, `close()` on every path, factory/`set_*`/`save` failures, `None`
+when disabled), `add_sensitivity` on both paths, callable steps in
+`ApplyPlan.add` and through the queue (success, reported failure, and a
+raising step), DPI-step-first ordering, and `test_full_plan_order` pinned to
+the CLI fallback via a `cli_only` fixture so its argv assertions stay exact.
+`test_library_step_preset_byte_matches_handler_contract` builds the packet with
+rivalcfg's own handler and the device's real profile, and asserts the CLI
+packet's byte 1 is `first_preset` — the bug, captured as a test.
+
+**Verified on hardware.**  Confirmed on the Aerox 5 Wireless (`1038:1852`,
+wireless): changing the active preset and pressing APPLY moves the pointer —
+this firmware *does* honour the `selected_preset` byte, so the selection is
+real and not just a record in the profile.  The log from the run is the whole
+mechanism in three lines, once per APPLY:
+
+```
+Profile saved: Default (dpi=[400, 800, 1000, 1800, 2200], polling=1000)
+set_sensitivity (library): values=[400, 800, 1000, 1800, 2200] selected_preset=2 save=True
+rivalcfg rivalcfg --polling-rate 1000
+```
+
+Two things that run also settles.  The preset index sent matches the radio
+that was picked, and repeats cleanly across a full cycle of the group
+(3 → 0 → 1 → 2 → 3 → 2, one write each, no duplicates or storms).  And
+**every** sensitivity write is accompanied by a `--polling-rate` invocation —
+i.e. every one of them came from APPLY, never from a bare radio click, so the
+no-writes-without-consent rule held on real hardware.  Direction mouse → app
+is still impossible: the hardware DPI button changes the stage and the app's
+readout correctly does not follow it.
+
+**Remaining (pre-existing).**  The 10 `.po` catalogs are stale against
+the source: ~49 msgids present in `xgettext` output are absent from every
+catalog, including page titles that were renamed at some point (`BATTERY`,
+`KEYBOARD`, `MOUSE`, `POWER`, `HYPRLAND`, `SLEEP TIMER`, …), and one `es`
+string is untranslated.  Those strings have been silently falling back to
+English; they predate this change and a `msgmerge` + translation pass is
+needed to close the gap.  Recorded here so it is not mistaken for new.

@@ -242,6 +242,8 @@ def current_apply_state():
     """Full apply state consumed by device_core.build_full_plan()."""
     state = _current_lighting_state()
     state["dpi"] = app_state.get("dpi_values") or []
+    state["dpi_active_index"] = app_state.get("dpi_active_index", 0)
+    state["save"] = not app_state.get("no_save")
     state["polling"] = app_state.get("polling_hz")
     state["buttons"] = app_state.get("button_mapping")
     return state
@@ -253,6 +255,7 @@ def save_profile(name):
     profile = {
         "schema": PROFILE_SCHEMA,
         "dpi_values": app_state.get("dpi_values", [800, 1600]),
+        "dpi_active_index": app_state.get("dpi_active_index", 0),
         "polling_hz": app_state.get("polling_hz", 1000),
         "zones": _current_zones(),
         "reactive": app_state.get("reactive_hex", "off"),
@@ -464,6 +467,12 @@ checkbutton {
     border: none;
     background: transparent;
     box-shadow: none;
+}
+
+.active-preset {
+    font-size: 12px;
+    font-weight: bold;
+    color: #ff7800;
 }
 
 spinbutton.value-display button {
@@ -806,14 +815,56 @@ def _hyprctl_set_follow_mouse(follow):
 
 def _hyprctl_sync_mouse_to_rivalcfg(dpi_value):
     """Sync Hyprland mouse DPI/sensitivity with rivalcfg settings."""
-    if not HYPRLAND_AVAILABLE:
+    if not HYPRLAND_AVAILABLE or dpi_value is None:
         return False
     sensitivity = max(-1.0, min(1.0, (dpi_value - 800) / 3700.0))
     return _hyprctl_set_mouse_sensitivity(sensitivity)
 
 
-def create_dpi_page():
-    """Create DPI settings page (ranges/steps from device caps)."""
+def _dpi_active_value():
+    """The DPI value the app treats as the active preset (clamped, never raises).
+
+    The mouse's live CPI stage cannot be read back (rivalcfg has no state
+    query), so this is the preset the app *sets* -- on Apply, or on a radio
+    click when auto-apply is on. See ``create_sensitivity_page``.
+    """
+    vals = app_state.get("dpi_values") or []
+    if not vals:
+        return None
+    idx = app_state.get("dpi_active_index", 0)
+    if not isinstance(idx, int) or not (0 <= idx < len(vals)):
+        idx = 0
+        app_state["dpi_active_index"] = 0
+    return vals[idx]
+
+
+def _sync_hyprland_to_active_dpi():
+    """Mirror the active DPI preset into Hyprland sensitivity.
+
+    Local system setting only — never a device write.
+    """
+    if not (app_state["settings"].get("hyprland_mouse_sync") and HYPRLAND_AVAILABLE):
+        return False
+    value = _dpi_active_value()
+    if value is None:
+        return False
+    return _hyprctl_sync_mouse_to_rivalcfg(value)
+
+
+def create_sensitivity_page():
+    """Create the Sensitivity page: DPI presets + polling rate, one page.
+
+    DPI presets and the polling rate are two halves of the same "how does the
+    pointer feel" question and were too sparse as separate pages.
+
+    The active DPI preset is picked with a radio beside each row, stored in the
+    profile as ``dpi_active_index`` and mirrored into Hyprland mouse sync. On
+    Apply (or on a click, when auto-apply is on) it is sent to the mouse through
+    the rivalcfg *library*, which is the only way to select a preset -- the CLI
+    resets the selection to the first preset on every write. The mouse cannot
+    report the stage back, so the readout shows what the app sets, not what the
+    mouse's own DPI button last did.
+    """
     caps = get_device_caps()
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
     page.set_margin_top(24)
@@ -821,7 +872,7 @@ def create_dpi_page():
     page.set_margin_start(24)
     page.set_margin_end(24)
 
-    title = Gtk.Label(label=_("DPI Settings"))
+    title = Gtk.Label(label=_("Sensitivity"))
     title.get_style_context().add_class("page-title")
     title.set_halign(Gtk.Align.START)
     page.pack_start(title, False, False, 0)
@@ -829,6 +880,12 @@ def create_dpi_page():
     card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
     card.get_style_context().add_class("card")
     page.pack_start(card, True, True, 0)
+
+    # -- DPI presets --------------------------------------------------------
+    dpi_title = Gtk.Label(label=_("DPI PRESETS"))
+    dpi_title.get_style_context().add_class("card-title")
+    dpi_title.set_halign(Gtk.Align.START)
+    card.pack_start(dpi_title, False, False, 0)
 
     presets_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     card.pack_start(presets_box, False, False, 0)
@@ -839,7 +896,10 @@ def create_dpi_page():
 
     app_state["dpi_scales"] = []
     app_state["dpi_labels"] = []
+    app_state["dpi_radios"] = []
     app_state["dpi_values"] = list(default_values)
+    if not isinstance(app_state.get("dpi_active_index"), int):
+        app_state["dpi_active_index"] = 0
 
     assets_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "assets")
     trash_pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
@@ -848,11 +908,64 @@ def create_dpi_page():
 
     add_btn = Gtk.Button(label="+ " + _("Add DPI"))
     add_btn.set_halign(Gtk.Align.START)
+    card.pack_start(add_btn, False, False, 0)
+
+    active_label = Gtk.Label()
+    active_label.get_style_context().add_class("active-preset")
+    active_label.set_halign(Gtk.Align.START)
+    active_label.set_tooltip_text(
+        _("What the app will set. The mouse's own DPI button isn't reported "
+          "back, so this can be out of date.")
+    )
+    card.pack_start(active_label, False, False, 0)
+
+    def _update_active_label():
+        vals = app_state["dpi_values"]
+        idx = app_state.get("dpi_active_index", 0)
+        if vals and 0 <= idx < len(vals):
+            active_label.set_text(
+                _("App preset: {n} — {value} DPI").format(n=idx + 1, value=vals[idx])
+            )
+        else:
+            active_label.set_text("")
+
+    def on_dpi_active_toggled(btn, idx):
+        if not btn.get_active() or app_state.get("_dpi_selecting"):
+            return
+        _set_active_index(idx)
+
+    def _set_active_index(idx):
+        """Make preset *idx* the active one.
+
+        Updates the UI, the Hyprland sync, and -- with auto-apply on -- the
+        mouse itself; without auto-apply the device is left alone until Apply
+        (the app's no-writes-without-consent rule).
+        """
+        vals = app_state["dpi_values"]
+        if not vals:
+            return
+        idx = max(0, min(int(idx), len(vals) - 1))
+        app_state["dpi_active_index"] = idx
+        app_state["_dpi_selecting"] = True
+        for i, rb in enumerate(app_state["dpi_radios"]):
+            rb.set_active(i == idx)
+        app_state["_dpi_selecting"] = False
+        _update_active_label()
+        if app_state["settings"].get("auto_apply"):
+            _sync_hyprland_to_active_dpi()
+            _auto_apply_dpi()
 
     def _auto_apply_dpi():
-        if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
-            vals = app_state["dpi_values"]
-            _debounce_args("dpi", ["--sensitivity", ",".join(str(v) for v in vals)])
+        if app_state.get("_loading_profile") or not app_state["settings"].get("auto_apply"):
+            return
+        plan = device_core.ApplyPlan(_("Sensitivity"))
+        device_core.add_sensitivity(
+            plan,
+            app_state["dpi_values"],
+            app_state.get("dpi_active_index", 0),
+            save=not app_state.get("no_save"),
+        )
+        _debounce_plan("dpi", plan)
 
     def on_add_dpi(btn):
         if len(app_state["dpi_values"]) >= max_presets:
@@ -862,31 +975,56 @@ def create_dpi_page():
         _auto_apply_dpi()
 
     add_btn.connect("clicked", on_add_dpi)
-    card.pack_start(add_btn, False, False, 0)
+
+    def on_delete_dpi(btn, idx):
+        if len(app_state["dpi_values"]) <= 1:
+            return
+        del app_state["dpi_values"][idx]
+        active = app_state.get("dpi_active_index", 0)
+        if idx < active:
+            active -= 1                  # every preset after the hole moved down
+        elif idx == active:
+            active = min(active, len(app_state["dpi_values"]) - 1)
+        app_state["dpi_active_index"] = max(0, active)
+        rebuild_dpi_ui()
+        _auto_apply_dpi()
 
     def rebuild_dpi_ui():
         for child in presets_box.get_children():
             presets_box.remove(child)
         app_state["dpi_scales"] = []
         app_state["dpi_labels"] = []
+        app_state["dpi_radios"] = []
+
+        active = app_state.get("dpi_active_index", 0)
+        if not (0 <= active < len(app_state["dpi_values"])):
+            active = app_state["dpi_active_index"] = 0
+
+        group = None
+        # The guard is up for the whole build, so the programmatic set_active()
+        # below can never be mistaken for the user picking a preset.
+        app_state["_dpi_selecting"] = True
 
         for i, val in enumerate(app_state["dpi_values"]):
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             row.set_margin_bottom(8)
 
-            def on_delete_dpi(btn, idx=i):
-                if len(app_state["dpi_values"]) <= 1:
-                    return
-                del app_state["dpi_values"][idx]
-                rebuild_dpi_ui()
-                _auto_apply_dpi()
-
             trash_btn = Gtk.Button()
             trash_btn.set_image(Gtk.Image.new_from_pixbuf(trash_pixbuf))
             trash_btn.set_relief(Gtk.ReliefStyle.NONE)
             trash_btn.get_style_context().add_class("dpi-delete-btn")
-            trash_btn.connect("clicked", on_delete_dpi)
-            row.pack_start(trash_btn, False, False, 0)
+            trash_btn.connect("clicked", on_delete_dpi, i)
+
+            active_radio = Gtk.RadioButton() if group is None else Gtk.RadioButton(group=group)
+            if group is None:
+                group = active_radio
+            active_radio.set_active(i == active)
+            active_radio.set_tooltip_text(
+                _("Select this preset as the active DPI (sent to the mouse on Apply)")
+            )
+            active_radio.connect("toggled", on_dpi_active_toggled, i)
+            row.pack_start(active_radio, False, False, 0)
+            app_state["dpi_radios"].append(active_radio)
 
             lbl = Gtk.Label(label=f"DPI {i + 1}")
             lbl.set_size_request(80, -1)
@@ -928,6 +1066,7 @@ def create_dpi_page():
                 guard[0] = False
                 app_state["dpi_values"][idx] = v
                 _auto_apply_dpi()
+                _update_active_label()
 
             def on_spin_changed(sb, idx=i, sc=scale, guard=_updating):
                 if guard[0]:
@@ -940,75 +1079,46 @@ def create_dpi_page():
                 guard[0] = False
                 app_state["dpi_values"][idx] = v
                 _auto_apply_dpi()
+                _update_active_label()
 
             scale.connect("value-changed", on_dpi_changed)
             spin_btn.connect("value-changed", on_spin_changed)
             row.pack_start(scale, True, True, 0)
             app_state["dpi_scales"].append(scale)
 
+            row.pack_end(trash_btn, False, False, 0)
             presets_box.pack_start(row, False, False, 0)
 
+        app_state["_dpi_selecting"] = False
         presets_box.show_all()
         add_btn.set_visible(len(app_state["dpi_values"]) < max_presets)
+        _update_active_label()
 
     app_state["_rebuild_dpi_ui"] = rebuild_dpi_ui
     rebuild_dpi_ui()
 
-    btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    btn_row.set_halign(Gtk.Align.START)
-
-    apply_btn = Gtk.Button(label=_("APPLY"))
-    apply_btn.get_style_context().add_class("apply-btn")
-
-    def on_apply_dpi(btn):
-        save_active_profile()
-        vals = app_state["dpi_values"]
-        arg = ",".join(str(v) for v in vals)
-        run_rivalcfg(["--sensitivity", arg])
-        if app_state["settings"].get("hyprland_mouse_sync") and HYPRLAND_AVAILABLE:
-            _hyprctl_sync_mouse_to_rivalcfg(vals[0])
-
-    apply_btn.connect("clicked", on_apply_dpi)
-    btn_row.pack_start(apply_btn, False, False, 0)
-
-    reset_btn = Gtk.Button(label=_("RESET"))
-    reset_btn.get_style_context().add_class("reset-btn")
-
-    def on_reset_dpi(btn):
-        app_state["dpi_values"] = list(default_values)
-        rebuild_dpi_ui()
-
-    reset_btn.connect("clicked", on_reset_dpi)
-    btn_row.pack_start(reset_btn, False, False, 0)
-
-    card.pack_start(btn_row, False, False, 0)
-
-    return page
-
-
-def create_polling_page():
-    """Create Polling Rate page."""
-    caps = get_device_caps()
-    page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
-    page.set_margin_top(24)
-    page.set_margin_bottom(24)
-    page.set_margin_start(24)
-    page.set_margin_end(24)
-
-    title = Gtk.Label(label=_("Polling Rate"))
-    title.get_style_context().add_class("page-title")
-    title.set_halign(Gtk.Align.START)
-    page.pack_start(title, False, False, 0)
-
-    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
-    card.get_style_context().add_class("card")
-    page.pack_start(card, True, True, 0)
+    # -- Polling rate -------------------------------------------------------
+    polling_title = Gtk.Label(label=_("POLLING RATE"))
+    polling_title.get_style_context().add_class("card-title")
+    polling_title.set_halign(Gtk.Align.START)
+    polling_title.set_margin_top(12)
+    card.pack_start(polling_title, False, False, 0)
 
     rates = list(caps.polling_choices) or [125, 250, 500, 1000]
     app_state["polling_hz"] = caps.polling_default
     app_state["polling_radios"] = {}
-    group = None
 
+    display = Gtk.Label()
+    display.get_style_context().add_class("value-display")
+    display.set_halign(Gtk.Align.START)
+    app_state["polling_display"] = display
+
+    def _update_polling_display(hz):
+        display.set_text(_("{} Hz → {} ms").format(hz, f"{1000.0 / hz:.1f}"))
+
+    _update_polling_display(caps.polling_default)
+
+    group = None
     radio_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
 
     for hz in rates:
@@ -1025,8 +1135,7 @@ def create_polling_page():
         def on_polling_toggled(button, val=hz):
             if button.get_active():
                 app_state["polling_hz"] = val
-                ms = 1000.0 / val
-                app_state["polling_display"].set_text(_("{} Hz → {} ms").format(val, f"{ms:.1f}"))
+                _update_polling_display(val)
                 if not app_state.get("_loading_profile") and app_state["settings"].get("auto_apply"):
                     _debounce_args("polling", ["--polling-rate", str(val)])
 
@@ -1034,24 +1143,49 @@ def create_polling_page():
         radio_box.pack_start(rb, False, False, 0)
 
     card.pack_start(radio_box, False, False, 0)
-
-    display = Gtk.Label(label=_("{} Hz → {} ms").format(caps.polling_default,
-                                                        f"{1000.0 / caps.polling_default:.1f}"))
-    display.get_style_context().add_class("value-display")
-    display.set_halign(Gtk.Align.START)
     card.pack_start(display, False, False, 0)
-    app_state["polling_display"] = display
+
+    # -- Apply / reset (one plan for both halves of the page) --------------
+    btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    btn_row.set_halign(Gtk.Align.START)
+    btn_row.set_margin_top(12)
 
     apply_btn = Gtk.Button(label=_("APPLY"))
     apply_btn.get_style_context().add_class("apply-btn")
-    apply_btn.set_halign(Gtk.Align.START)
 
-    def on_apply_polling(btn):
+    def on_apply_sensitivity(btn):
         save_active_profile()
-        run_rivalcfg(["--polling-rate", str(app_state["polling_hz"])])
+        plan = device_core.ApplyPlan(_("Sensitivity"))
+        # The DPI presets go through the library (the CLI cannot select a preset);
+        # polling stays on the CLI batch, in the same order as before.
+        device_core.add_sensitivity(
+            plan,
+            app_state["dpi_values"],
+            app_state.get("dpi_active_index", 0),
+            save=not app_state.get("no_save"),
+        )
+        plan.add(["--polling-rate", str(app_state["polling_hz"])])
+        _queue_plan(plan)
+        _sync_hyprland_to_active_dpi()
 
-    apply_btn.connect("clicked", on_apply_polling)
-    card.pack_start(apply_btn, False, False, 0)
+    apply_btn.connect("clicked", on_apply_sensitivity)
+    btn_row.pack_start(apply_btn, False, False, 0)
+
+    reset_btn = Gtk.Button(label=_("RESET"))
+    reset_btn.get_style_context().add_class("reset-btn")
+
+    def on_reset_sensitivity(btn):
+        app_state["dpi_values"] = list(default_values)
+        app_state["dpi_active_index"] = 0
+        app_state["polling_hz"] = caps.polling_default
+        rebuild_dpi_ui()
+        for hz, rb in app_state["polling_radios"].items():
+            rb.set_active(hz == caps.polling_default)
+
+    reset_btn.connect("clicked", on_reset_sensitivity)
+    btn_row.pack_start(reset_btn, False, False, 0)
+
+    card.pack_start(btn_row, False, False, 0)
 
     return page
 
@@ -2059,7 +2193,13 @@ def apply_profile_to_ui(profile):
     try:
         dpi = profile.get("dpi_values")
         if dpi:
-            app_state["dpi_values"] = [int(v) for v in dpi]
+            vals = [int(v) for v in dpi]
+            app_state["dpi_values"] = vals
+            try:
+                active = int(profile.get("dpi_active_index", 0))
+            except (TypeError, ValueError):
+                active = 0
+            app_state["dpi_active_index"] = max(0, min(active, len(vals) - 1))
             if "_rebuild_dpi_ui" in app_state:
                 app_state["_rebuild_dpi_ui"]()
 
@@ -2138,10 +2278,7 @@ def apply_all_to_device():
     caps = get_device_caps()
     plan = device_core.build_full_plan(caps, current_apply_state())
     _queue_plan(plan)
-    if app_state["settings"].get("hyprland_mouse_sync") and HYPRLAND_AVAILABLE:
-        dpi_vals = app_state.get("dpi_values")
-        if dpi_vals:
-            _hyprctl_sync_mouse_to_rivalcfg(dpi_vals[0])
+    _sync_hyprland_to_active_dpi()
 
 
 def create_settings_page():
@@ -2407,8 +2544,7 @@ def create_settings_page():
             logging.info("Settings: hyprland_mouse_sync = %s", val)
             save_settings()
             if val:
-                dpi = app_state.get("dpi_values", [800])[0]
-                _hyprctl_sync_mouse_to_rivalcfg(dpi)
+                _hyprctl_sync_mouse_to_rivalcfg(_dpi_active_value())
         sync_switch.connect("notify::active", on_hyprland_sync_toggled)
 
         # Follow Mouse
@@ -2646,8 +2782,7 @@ def rebuild_ui():
     def restore_page():
         app_state["stack"].set_visible_child_name(current_page)
         nav_labels = {
-            "dpi": _("DPI"),
-            "polling": _("POLLING"),
+            "sensitivity": _("SENSITIVITY"),
             "rgb": _("RGB"),
             "buttons": _("BUTTONS"),
             "devices": _("DEVICES"),
@@ -3030,8 +3165,7 @@ def create_window_content(window):
     app_state["stack"] = stack
 
     pages = [
-        ("dpi", _("DPI"), create_dpi_page()),
-        ("polling", _("POLLING"), create_polling_page()),
+        ("sensitivity", _("SENSITIVITY"), create_sensitivity_page()),
         ("rgb", _("RGB"), create_rgb_page()),
         ("buttons", _("BUTTONS"), create_buttons_page()),
         ("devices", _("DEVICES"), create_devices_page()),
@@ -3053,7 +3187,9 @@ def create_window_content(window):
 
     nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
 
-    _start_page = os.environ.get("RIVALCFG_GUI_START_PAGE", "dpi")
+    _start_page = os.environ.get("RIVALCFG_GUI_START_PAGE", "sensitivity")
+    if _start_page in ("dpi", "polling"):        # merged into one page
+        _start_page = "sensitivity"
     for i, (name, title, __page) in enumerate(pages):
         btn = Gtk.Button(label=title)
         btn.get_style_context().add_class("nav-btn")
@@ -3065,7 +3201,7 @@ def create_window_content(window):
         nav_box.pack_start(btn, False, False, 0)
         app_state["nav_buttons"].append(btn)
 
-    if _start_page != "dpi":
+    if _start_page != "sensitivity":
         GLib.idle_add(stack.set_visible_child_name, _start_page)
 
     nav_scroll = Gtk.ScrolledWindow()

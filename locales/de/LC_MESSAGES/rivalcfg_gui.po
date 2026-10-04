@@ -50,8 +50,8 @@ msgid "Unexpected error"
 msgstr "Unerwarteter Fehler"
 
 #: rivalcfg_gui.py:437
-msgid "DPI Settings"
-msgstr "DPI-Einstellungen"
+#~ msgid "DPI Settings"
+#~ msgstr "DPI-Einstellungen"
 
 #: rivalcfg_gui.py:455
 msgid "Preset"
@@ -67,8 +67,8 @@ msgid "RESET"
 msgstr "ZURÜCKSETZEN"
 
 #: rivalcfg_gui.py:529
-msgid "Polling Rate"
-msgstr "Abfragrate"
+#~ msgid "Polling Rate"
+#~ msgstr "Abfragrate"
 
 #: rivalcfg_gui.py:547 rivalcfg_gui.py:551
 #, python-brace-format
@@ -205,8 +205,8 @@ msgid "Forward"
 msgstr "Vorwärts"
 
 #: rivalcfg_gui.py:856 rivalcfg_gui.py:1546 rivalcfg_gui.py:1895
-msgid "DPI"
-msgstr "DPI"
+#~ msgid "DPI"
+#~ msgstr "DPI"
 
 #: rivalcfg_gui.py:1082
 msgid "Connected Devices"
@@ -350,8 +350,8 @@ msgid "Factory Reset"
 msgstr "Werkseinstellungen"
 
 #: rivalcfg_gui.py:1547 rivalcfg_gui.py:1896
-msgid "POLLING"
-msgstr "ABFRAGE"
+#~ msgid "POLLING"
+#~ msgstr "ABFRAGE"
 
 #: rivalcfg_gui.py:1548 rivalcfg_gui.py:1897
 msgid "RGB"
@@ -567,3 +567,41 @@ msgstr "Fehler melden"
 
 #~ msgid "DPI (B6)"
 #~ msgstr "DPI (B6)"
+
+#: rivalcfg_gui.py
+msgid "Sensitivity"
+msgstr "Empfindlichkeit"
+
+#: rivalcfg_gui.py
+msgid "SENSITIVITY"
+msgstr "EMPFINDLICHKEIT"
+
+#: rivalcfg_gui.py
+msgid "DPI PRESETS"
+msgstr "DPI-VOREINSTELLUNGEN"
+
+#: rivalcfg_gui.py
+msgid "POLLING RATE"
+msgstr "ABTASTRATE"
+
+#: rivalcfg_gui.py
+#, python-brace-format
+msgid "App preset: {n} — {value} DPI"
+msgstr "App-Preset: {n} — {value} DPI"
+
+#: rivalcfg_gui.py
+msgid "Select this preset as the active DPI (sent to the mouse on Apply)"
+msgstr "Dieses Preset als aktives DPI verwenden (wird bei „Übernehmen“ an die Maus gesendet)"
+
+#: rivalcfg_gui.py
+msgid "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
+msgstr "Was die App setzen wird. Die DPI-Taste der Maus wird nicht zurückgemeldet, daher kann diese Anzeige veraltet sein."
+
+#~ #: rivalcfg_gui.py
+#~ #, python-brace-format
+#~ msgid "Active: DPI {n} — {value}"
+#~ msgstr "Aktiv: DPI {n} — {value}"
+
+#~ #: rivalcfg_gui.py
+#~ msgid "Use this preset as the active DPI"
+#~ msgstr "Diese Voreinstellung als aktive DPI verwenden"

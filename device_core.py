@@ -16,12 +16,13 @@ reused by the GUI. It owns three things (see ``PLAN.md`` Phase 1):
 from __future__ import annotations
 
 import logging
+import os
 import queue as _queue
 import re
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Callable, Iterable, Optional
+from typing import Callable, Iterable, Optional, Union
 
 
 # ---------------------------------------------------------------------------
@@ -611,19 +612,28 @@ class DeviceManager:
 # Plans
 # ---------------------------------------------------------------------------
 
+#: One plan step: a rivalcfg CLI argv, or a callable returning ``(ok, output)``.
+#:
+#: The library form exists because some settings cannot be expressed on the
+#: command line at all -- most notably the active DPI preset, which the CLI
+#: always resets to the first one (see :func:`sensitivity_library_step`).
+Step = Union[list[str], Callable[[], "tuple[bool, str]"]]
+
+
 @dataclass
 class ApplyPlan:
     """One ordered, atomic unit of work."""
 
     label: str
-    steps: list[list[str]] = field(default_factory=list)
+    steps: list[Step] = field(default_factory=list)
     on_done: Optional[Callable[[bool, str], None]] = None
     #: When True, ``--no-save`` is added by the runner if the user enabled it.
     saves: bool = True
 
-    def add(self, argv: list[str]) -> "ApplyPlan":
-        if argv:
-            self.steps.append(list(argv))
+    def add(self, step: Step) -> "ApplyPlan":
+        """Append one step: a CLI argv, or a callable doing a library write."""
+        if step:
+            self.steps.append(list(step) if isinstance(step, (list, tuple)) else step)
         return self
 
     def __bool__(self) -> bool:
@@ -631,6 +641,104 @@ class ApplyPlan:
 
     def __len__(self) -> int:
         return len(self.steps)
+
+
+#: When False, nothing is written through the rivalcfg library: every plan step
+#: falls back to the CLI. Set ``RIVALCFG_GUI_FORCE_CLI=1`` to force it.
+USE_LIBRARY_WRITES = os.environ.get("RIVALCFG_GUI_FORCE_CLI") != "1"
+
+
+def sensitivity_library_step(
+    values: Iterable[int],
+    active_index: int = 0,
+    save: bool = True,
+    mouse_factory: Optional[Callable[[], object]] = None,
+) -> Optional[Callable[[], "tuple[bool, str]"]]:
+    """Return a plan step that writes the DPI presets and selects the active one.
+
+    The CLI cannot do this. ``multidpi_*`` handlers take a ``selected_preset``
+    argument, but the CLI only ever parses the DPI list, so every
+    ``--sensitivity`` invocation sends ``first_preset`` -- i.e. it drags the
+    mouse back to preset 1 (rivalcfg docs: "When you set the sensitivity through
+    the CLI, the selected preset always back to the first one"). Only the
+    library's generated ``set_sensitivity(values, selected_preset)`` method can
+    select a preset, which is why this step exists.
+
+    Returns ``None`` when library writes are disabled or the library is
+    unavailable, so callers can fall back to the CLI argv.
+
+    :param values: the DPI presets, in order.
+    :param active_index: 0-based index of the preset to make active.
+    :param save: persist to the mouse's internal memory.
+    :param mouse_factory: injection seam for tests; defaults to
+                          ``rivalcfg.get_first_mouse()``, matching the CLI
+                          runner, which never passes ``--device``.
+    """
+    if not USE_LIBRARY_WRITES:
+        return None
+
+    dpis = [int(v) for v in values]
+    if not dpis:
+        return None
+
+    def _get_mouse():
+        if mouse_factory is not None:
+            return mouse_factory()
+        from rivalcfg import get_first_mouse  # type: ignore
+
+        return get_first_mouse()
+
+    def set_sensitivity() -> "tuple[bool, str]":
+        """Write the presets and select preset *active_index* (never raises)."""
+        logging.info(
+            "set_sensitivity (library): values=%s selected_preset=%s save=%s",
+            dpis, active_index, save,
+        )
+        mouse = None
+        try:
+            mouse = _get_mouse()
+            mouse.set_sensitivity(dpis, active_index)
+            if save:
+                mouse.save()
+            return True, ""
+        except ImportError:
+            return False, "rivalcfg library is not importable"
+        except Exception as exc:
+            return False, "%s: %s" % (_library_error_hint(exc), exc)
+        finally:
+            if mouse is not None:
+                try:
+                    mouse.close()
+                except Exception:  # pragma: no cover - defensive
+                    logging.debug("mouse.close() failed", exc_info=True)
+
+    return set_sensitivity
+
+
+def _library_error_hint(exc: Exception) -> str:
+    """A readable prefix for library write failures (the mouse may be off)."""
+    if isinstance(exc, (IOError, OSError)):
+        return "Cannot reach the mouse (is it turned on?)"
+    return "Library write failed"
+
+
+def add_sensitivity(
+    plan: ApplyPlan,
+    values: Iterable[int],
+    active_index: int = 0,
+    save: bool = True,
+) -> ApplyPlan:
+    """Append the sensitivity write to *plan* -- library step, else CLI argv.
+
+    Single source of truth for every DPI write path, so the active preset is
+    carried consistently (or, on the CLI fallback, knowingly dropped).
+    """
+    step = sensitivity_library_step(values, active_index, save=save)
+    if step is not None:
+        plan.add(step)
+    else:
+        plan.add(["--sensitivity", ",".join(str(int(v)) for v in values)])
+    return plan
 
 
 def build_buttons_arg(caps: DeviceCaps, mapping: dict) -> str:
@@ -704,15 +812,26 @@ def _append_lighting(plan: ApplyPlan, caps: DeviceCaps, state: dict) -> ApplyPla
 def build_full_plan(caps: DeviceCaps, state: dict) -> ApplyPlan:
     """Everything the "Apply all" path sends for the current profile.
 
-    DPI/polling/buttons join the zone colours in the first invocation; the
-    order-sensitive lighting phases stay separate (see build_lighting_plan).
+    The DPI write goes first, as its own step, because selecting the active
+    preset needs the library (see ``sensitivity_library_step``) while the rest
+    of the settings batch into one CLI invocation. The order-sensitive lighting
+    phases stay separate (see build_lighting_plan).
+
+    ``state`` keys: ``dpi``, ``dpi_active_index``, ``save``, ``polling``,
+    ``buttons``, plus the lighting keys documented on build_lighting_plan.
     """
     plan = ApplyPlan("Apply settings")
 
-    leading: list[str] = []
     dpi = state.get("dpi") or []
     if dpi:
-        leading.extend(["--sensitivity", ",".join(str(int(v)) for v in dpi)])
+        add_sensitivity(
+            plan,
+            dpi,
+            state.get("dpi_active_index", 0),
+            save=state.get("save", True),
+        )
+
+    leading: list[str] = []
     polling = state.get("polling")
     if polling:
         leading.extend(["--polling-rate", str(int(polling))])
@@ -863,12 +982,21 @@ class CommandQueue:
         try:
             for step in plan.steps:
                 try:
-                    ok, out = self._runner(step)
+                    # A step is either a CLI argv or a self-contained callable
+                    # (library write); both must return ``(ok, output)``.
+                    if callable(step):
+                        ok, out = step()
+                    else:
+                        ok, out = self._runner(step)
                 except Exception as exc:  # runner must not raise, but be safe
                     ok, out = False, str(exc)
                 last_output = out or ""
                 if not ok:
-                    detail = " ".join(step)
+                    detail = (
+                        " ".join(step)
+                        if isinstance(step, (list, tuple))
+                        else getattr(step, "__name__", "library call")
+                    )
                     msg = "%s: %s" % (detail, last_output or "failed")
                     logging.error("Plan %r failed at step %r: %s", plan.label, step, last_output)
                     self._status("error", msg)
@@ -916,6 +1044,7 @@ def migrate_profile(data) -> Optional[dict]:
             out[key] = default
 
     _copy("dpi_values", lambda v: [int(x) for x in v], [800, 1600])
+    _copy("dpi_active_index", int, 0)
     _copy("polling_hz", int, 1000)
     out["button_mapping"] = data.get("button_mapping") if isinstance(data.get("button_mapping"), dict) else {}
 

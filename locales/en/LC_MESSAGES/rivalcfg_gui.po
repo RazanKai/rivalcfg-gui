@@ -50,8 +50,8 @@ msgid "Unexpected error"
 msgstr "Unexpected error"
 
 #: rivalcfg_gui.py:437
-msgid "DPI Settings"
-msgstr "DPI Settings"
+#~ msgid "DPI Settings"
+#~ msgstr "DPI Settings"
 
 #: rivalcfg_gui.py:455
 msgid "Preset"
@@ -67,8 +67,8 @@ msgid "RESET"
 msgstr "RESET"
 
 #: rivalcfg_gui.py:529
-msgid "Polling Rate"
-msgstr "Polling Rate"
+#~ msgid "Polling Rate"
+#~ msgstr "Polling Rate"
 
 #: rivalcfg_gui.py:547 rivalcfg_gui.py:551
 #, python-brace-format
@@ -205,8 +205,8 @@ msgid "Forward"
 msgstr "Forward"
 
 #: rivalcfg_gui.py:856 rivalcfg_gui.py:1546 rivalcfg_gui.py:1895
-msgid "DPI"
-msgstr "DPI"
+#~ msgid "DPI"
+#~ msgstr "DPI"
 
 #: rivalcfg_gui.py:1082
 msgid "Connected Devices"
@@ -350,8 +350,8 @@ msgid "Factory Reset"
 msgstr "Factory Reset"
 
 #: rivalcfg_gui.py:1547 rivalcfg_gui.py:1896
-msgid "POLLING"
-msgstr "POLLING"
+#~ msgid "POLLING"
+#~ msgstr "POLLING"
 
 #: rivalcfg_gui.py:1548 rivalcfg_gui.py:1897
 msgid "RGB"
@@ -567,3 +567,41 @@ msgstr "Bug Report"
 
 #~ msgid "DPI (B6)"
 #~ msgstr "DPI (B6)"
+
+#: rivalcfg_gui.py
+msgid "Sensitivity"
+msgstr "Sensitivity"
+
+#: rivalcfg_gui.py
+msgid "SENSITIVITY"
+msgstr "SENSITIVITY"
+
+#: rivalcfg_gui.py
+msgid "DPI PRESETS"
+msgstr "DPI PRESETS"
+
+#: rivalcfg_gui.py
+msgid "POLLING RATE"
+msgstr "POLLING RATE"
+
+#: rivalcfg_gui.py
+#, python-brace-format
+msgid "App preset: {n} — {value} DPI"
+msgstr "App preset: {n} — {value} DPI"
+
+#: rivalcfg_gui.py
+msgid "Select this preset as the active DPI (sent to the mouse on Apply)"
+msgstr "Select this preset as the active DPI (sent to the mouse on Apply)"
+
+#: rivalcfg_gui.py
+msgid "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
+msgstr "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
+
+#~ #: rivalcfg_gui.py
+#~ #, python-brace-format
+#~ msgid "Active: DPI {n} — {value}"
+#~ msgstr "Active: DPI {n} — {value}"
+
+#~ #: rivalcfg_gui.py
+#~ msgid "Use this preset as the active DPI"
+#~ msgstr "Use this preset as the active DPI"

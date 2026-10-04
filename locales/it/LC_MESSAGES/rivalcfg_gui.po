@@ -50,8 +50,8 @@ msgid "Unexpected error"
 msgstr "Errore imprevisto"
 
 #: rivalcfg_gui.py:437
-msgid "DPI Settings"
-msgstr "Impostazioni DPI"
+#~ msgid "DPI Settings"
+#~ msgstr "Impostazioni DPI"
 
 #: rivalcfg_gui.py:455
 msgid "Preset"
@@ -67,8 +67,8 @@ msgid "RESET"
 msgstr "REIMPOSTA"
 
 #: rivalcfg_gui.py:529
-msgid "Polling Rate"
-msgstr "Frequenza di polling"
+#~ msgid "Polling Rate"
+#~ msgstr "Frequenza di polling"
 
 #: rivalcfg_gui.py:547 rivalcfg_gui.py:551
 #, python-brace-format
@@ -205,8 +205,8 @@ msgid "Forward"
 msgstr "Avanti"
 
 #: rivalcfg_gui.py:856 rivalcfg_gui.py:1546 rivalcfg_gui.py:1895
-msgid "DPI"
-msgstr "DPI"
+#~ msgid "DPI"
+#~ msgstr "DPI"
 
 #: rivalcfg_gui.py:1082
 msgid "Connected Devices"
@@ -350,8 +350,8 @@ msgid "Factory Reset"
 msgstr "Reset fabbrica"
 
 #: rivalcfg_gui.py:1547 rivalcfg_gui.py:1896
-msgid "POLLING"
-msgstr "POLLING"
+#~ msgid "POLLING"
+#~ msgstr "POLLING"
 
 #: rivalcfg_gui.py:1548 rivalcfg_gui.py:1897
 msgid "RGB"
@@ -567,3 +567,41 @@ msgstr "Segnala bug"
 
 #~ msgid "DPI (B6)"
 #~ msgstr "DPI (B6)"
+
+#: rivalcfg_gui.py
+msgid "Sensitivity"
+msgstr "Sensibilità"
+
+#: rivalcfg_gui.py
+msgid "SENSITIVITY"
+msgstr "SENSIBILITÀ"
+
+#: rivalcfg_gui.py
+msgid "DPI PRESETS"
+msgstr "PRESET DPI"
+
+#: rivalcfg_gui.py
+msgid "POLLING RATE"
+msgstr "FREQUENZA DI POLLING"
+
+#: rivalcfg_gui.py
+#, python-brace-format
+msgid "App preset: {n} — {value} DPI"
+msgstr "Preset dell'app: {n} — {value} DPI"
+
+#: rivalcfg_gui.py
+msgid "Select this preset as the active DPI (sent to the mouse on Apply)"
+msgstr "Usa questo preset come DPI attivo (inviato al mouse su Applica)"
+
+#: rivalcfg_gui.py
+msgid "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
+msgstr "Ciò che imposterà l'app. Il pulsante DPI del mouse non viene riportato, quindi questo valore può essere obsoleto."
+
+#~ #: rivalcfg_gui.py
+#~ #, python-brace-format
+#~ msgid "Active: DPI {n} — {value}"
+#~ msgstr "Attivo: DPI {n} — {value}"
+
+#~ #: rivalcfg_gui.py
+#~ msgid "Use this preset as the active DPI"
+#~ msgstr "Usa questo preset come DPI attivo"
