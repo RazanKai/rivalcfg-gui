@@ -116,13 +116,6 @@ def is_steelseries_connected(debug_text):
     return bool(re.search(r"1038:[0-9a-fA-F]{4}", debug_text))
 
 
-def build_buttons_arg(mapping, caps=None):
-    """Build the rivalcfg --buttons argument (single source of truth)."""
-    if caps is None:
-        caps = get_device_caps()
-    return device_core.build_buttons_arg(caps, mapping)
-
-
 def _caps_device_name(caps):
     return caps.name or _("Mouse connected")
 
@@ -2135,12 +2128,21 @@ def create_buttons_page():
     app_state["button_defaults"] = defaults
 
     device_button_keys = set(caps.button_keys)
-    mouse_targets = sorted(k for k in device_button_keys if k.startswith("button"))
-    scroll_targets = [s for s in ("scrollup", "scrolldown") if s in device_button_keys]
-    has_dpi_action = caps.raw_settings.get("buttons_mapping", {}).get("button_dpi_switch") is not None
-    special_targets = (["dpi"] if has_dpi_action else []) + scroll_targets + ["disabled"]
-    key_items = device_core.keyboard_keys() if keyboard else []
+    key_groups = device_core.keyboard_groups() if keyboard else []
+    key_items = [name for _group_id, names in key_groups for name in names]
     mm_items = device_core.MULTIMEDIA_ACTIONS if multimedia else []
+
+    #: Modifier toggles in the popover, as (key name, short label) pairs.
+    combo_modifiers = device_core.COMBO_MODIFIERS if key_items else []
+
+    #: Held modifier mask -> canonical key name, read off a key press's state.
+    #: Super arrives as MOD4 on X11 and SUPER on Wayland, so both are accepted.
+    capture_modifiers = [
+        (Gdk.ModifierType.CONTROL_MASK, "LeftCtrl"),
+        (Gdk.ModifierType.SHIFT_MASK, "LeftShift"),
+        (Gdk.ModifierType.MOD1_MASK, "LeftAlt"),
+        (Gdk.ModifierType.MOD4_MASK | Gdk.ModifierType.SUPER_MASK, "LeftSuper"),
+    ]
 
     card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     card.get_style_context().add_class("card")
@@ -2206,6 +2208,10 @@ def create_buttons_page():
     popover_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
     popover_scroll.set_min_content_height(120)
     popover_scroll.set_max_content_height(420)
+    # Without this the scrolled window reports only min_content_height (120)
+    # however much is in the list, and the popover opens as a small scrolling
+    # slot instead of growing to max_content_height.
+    popover_scroll.set_propagate_natural_height(True)
     popover_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
     popover_box.set_margin_start(8)
     popover_box.set_margin_end(8)
@@ -2213,6 +2219,78 @@ def create_buttons_page():
     popover_box.set_margin_bottom(8)
     popover_scroll.add(popover_box)
     popover.add(popover_scroll)
+
+    # -- Key capture --------------------------------------------------------
+    # Filled in by _build_popover and read by the handlers below.
+    capture_state = {"armed": False, "fill": None, "disarm": None,
+                     "window_hooked": False}
+
+    def _handle_key(keyval, state):
+        """Consume a press while the capture is armed. True = consumed."""
+        if not capture_state["armed"] or capture_state["fill"] is None:
+            return False
+        symbol = Gdk.keyval_name(keyval)
+        if symbol == "Escape":
+            capture_state["disarm"]()
+            return True
+        if symbol is None or device_core.is_modifier_symbol(symbol):
+            # A modifier on its own is not the key being bound, and a key we
+            # cannot name is not one the mouse can send: keep listening.
+            return True
+        name = device_core.key_for_symbol(symbol)
+        if name is None:
+            return True
+        held = [n for mask, n in capture_modifiers if state & mask]
+        if name not in held:
+            held.append(name)
+        capture_state["fill"](held)
+        return True
+
+    def on_key_pressed(_controller, keyval, _keycode, state):
+        return _handle_key(keyval, state)
+
+    def on_window_key_pressed(_widget, event):
+        return _handle_key(event.keyval, event.state)
+
+    def on_popover_key_pressed(_widget, event):
+        return _handle_key(event.keyval, event.state)
+
+    # Escape is caught on the popover itself. Ordinary keys propagate
+    # popover -> toplevel, but Escape never reaches the toplevel: GtkPopover takes
+    # it to dismiss itself, and only the popover's own key-press-event sees it.
+    # Consuming it there is what keeps "Esc cancels" from closing the whole
+    # popover, so a cancelled capture can still be re-done from the dropdown.
+    #
+    # Everything else is caught on the toplevel window. While the pointer rests on
+    # the popover -- where it always is, having just clicked "Press a key…" -- a
+    # press is delivered to the toplevel's key-press-event and never reaches a
+    # controller attached to the popover, so an armed capture would silently see
+    # nothing. The popover handler runs first, so it fills the capture and disarms;
+    # the toplevel handler then finds nothing armed and does nothing, which is why
+    # the key is filled in only once. The controller is kept too: it still fires on
+    # the pointer-outside path. This GTK build has no
+    # Widget.add_controller, so the controller goes on through the constructor's
+    # ``widget`` property and cannot be detached -- building one per open would
+    # stack another on every time the popover opens.
+    if key_items:
+        key_controller = Gtk.EventControllerKey.new(popover)
+        key_controller.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        key_controller.connect("key-pressed", on_key_pressed)
+        popover.connect("key-press-event", on_popover_key_pressed)
+
+        def _hook_toplevel(*_a):
+            # The popover has no parent window yet while the page is being
+            # built, so this waits until it is shown and its toplevel exists.
+            if capture_state["window_hooked"]:
+                return
+            toplevel = popover.get_toplevel()
+            if isinstance(toplevel, Gtk.Window):
+                toplevel.connect("key-press-event", on_window_key_pressed)
+                capture_state["window_hooked"] = True
+
+        popover.connect("show", _hook_toplevel)
+        popover.connect(
+            "closed", lambda *_a: capture_state.__setitem__("armed", False))
 
     current_button = [None]
 
@@ -2230,7 +2308,9 @@ def create_buttons_page():
         drawing.queue_draw()
         popover.popdown()
         if app_state["settings"].get("auto_apply"):
-            _debounce_args("buttons", ["--buttons", build_buttons_arg(app_state["button_mapping"], caps)])
+            plan = device_core.ApplyPlan("Buttons")
+            device_core.add_buttons(plan, caps, app_state["button_mapping"])
+            _debounce_plan("buttons", plan)
 
     def _add_action_button(text, value, button_key):
         btn = Gtk.Button(label=text)
@@ -2246,35 +2326,185 @@ def create_buttons_page():
         header.set_halign(Gtk.Align.START)
         popover_box.pack_start(header, False, False, 0)
 
-        popover_box.pack_start(_section_label(_("MOUSE")), False, False, 0)
-        for target in mouse_targets:
-            _add_action_button(device_core.action_label(target), target, button_key)
-        for target in special_targets:
-            _add_action_button(device_core.action_label(target), target, button_key)
+        # No mouse button is offered as a target: the mouse already has its
+        # buttons, so mapping one to another is a no-op at best. Only this
+        # button's own factory action and "Disabled" sit here.
+        default = app_state["button_defaults"].get(button_key, "disabled")
+        if default and default != "disabled":
+            _add_action_button(
+                _("Default (%s)") % device_core.action_label(default), default, button_key
+            )
+        _add_action_button(device_core.action_label("disabled"), "disabled", button_key)
 
         if mm_items:
             popover_box.pack_start(_section_label(_("MULTIMEDIA")), False, False, 0)
             for value, label in mm_items:
                 _add_action_button(label, value, button_key)
 
+        too_many = None
         if key_items:
             popover_box.pack_start(_section_label(_("KEYBOARD")), False, False, 0)
+            capture_state["armed"] = False
+            capture_state["fill"] = None
+
+            capture_btn = Gtk.ToggleButton(label=_("Press a key…"))
+            capture_btn.set_halign(Gtk.Align.START)
+            popover_box.pack_start(capture_btn, False, False, 0)
+
+            picker_choice = [key_items[0]]
+
             key_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            key_combo = Gtk.ComboBoxText()
-            for key in key_items:
-                key_combo.append_text(key)
-            key_combo.set_active(0)
-            key_row.pack_start(key_combo, True, True, 0)
+            key_picker_btn = Gtk.Button()
+            picker_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            picker_label = Gtk.Label(label=device_core.action_label(picker_choice[0]))
+            picker_label.set_halign(Gtk.Align.START)
+            picker_arrow = Gtk.Label(label="▾")
+            picker_arrow.get_style_context().add_class("profile-arrow")
+            picker_inner.pack_start(picker_label, True, True, 0)
+            picker_inner.pack_start(picker_arrow, False, False, 0)
+            key_picker_btn.add(picker_inner)
+            key_row.pack_start(key_picker_btn, True, True, 0)
             assign_btn = Gtk.Button(label=_("Assign"))
             key_row.pack_start(assign_btn, False, False, 0)
             popover_box.pack_start(key_row, False, False, 0)
-            assign_btn.connect("clicked", lambda _w: _apply(button_key, key_combo.get_active_text()))
+
+            # The hundred keys, grouped under a heading per block. A plain
+            # combo cannot label its separators, so the list is its own popover,
+            # shaped like the profile selector's.
+            picker_popover = Gtk.Popover.new(key_picker_btn)
+            picker_popover.set_position(Gtk.PositionType.BOTTOM)
+            picker_popover.get_style_context().add_class("profile-popover")
+            picker_scroll = Gtk.ScrolledWindow()
+            picker_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            picker_scroll.set_min_content_height(160)
+            picker_scroll.set_max_content_height(320)
+            picker_scroll.set_propagate_natural_height(True)
+            picker_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+            picker_scroll.add(picker_list)
+            picker_popover.add(picker_scroll)
+
+            def _choose_key(name):
+                picker_choice[0] = name
+                picker_label.set_text(device_core.action_label(name))
+
+            for group_id, names in key_groups:
+                heading = Gtk.Label(label=_(group_id).upper())
+                heading.get_style_context().add_class("card-title")
+                heading.set_halign(Gtk.Align.START)
+                heading.set_margin_top(8)
+                heading.set_margin_bottom(2)
+                heading.set_margin_start(8)
+                picker_list.pack_start(heading, False, False, 0)
+                for name in names:
+                    row_btn = Gtk.Button(label=device_core.action_label(name))
+                    row_btn.set_relief(Gtk.ReliefStyle.NONE)
+                    row_btn.set_halign(Gtk.Align.FILL)
+                    row_btn.get_style_context().add_class("profile-menu-select")
+
+                    def _pick(_w, chosen=name):
+                        _choose_key(chosen)
+                        picker_popover.popdown()
+
+                    row_btn.connect("clicked", _pick)
+                    picker_list.pack_start(row_btn, False, False, 0)
+            picker_popover.show_all()
+
+            def _toggle_picker(_btn):
+                if picker_popover.get_visible():
+                    picker_popover.popdown()
+                else:
+                    picker_popover.popup()
+
+            key_picker_btn.connect("clicked", _toggle_picker)
+
+            # Modifiers are emitted before the key, so the packet bytes match
+            # flozz's captures (issue #171): LCtrl + RShift + C -> 51 E0 E5 06 00.
+            mod_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
+            mod_toggles = []
+            for name, label in combo_modifiers:
+                toggle = Gtk.ToggleButton(label=_(label))
+                mod_row.pack_start(toggle, False, False, 0)
+                mod_toggles.append((toggle, name))
+            popover_box.pack_start(mod_row, False, False, 0)
+
             layout_hint = Gtk.Label(label=_("Layout: qwerty"))
             layout_hint.get_style_context().add_class("setting-desc")
             layout_hint.set_halign(Gtk.Align.START)
             popover_box.pack_start(layout_hint, False, False, 0)
 
-        popover_box.show_all()
+            too_many = Gtk.Label(
+                label=_("At most %d keys at once") % device_core.COMBO_MAX_KEYS
+            )
+            too_many.get_style_context().add_class("setting-desc")
+            too_many.set_halign(Gtk.Align.START)
+            too_many.set_no_show_all(True)
+            popover_box.pack_start(too_many, False, False, 0)
+
+            def _selected_keys():
+                keys = [name for toggle, name in mod_toggles if toggle.get_active()]
+                key = picker_choice[0]
+                # The layout lists the modifiers as keys too, so picking one as
+                # the key would otherwise pair it with its own toggle.
+                if key and key not in keys:
+                    keys.append(key)
+                return keys
+
+            def _refresh_limits():
+                over = len(_selected_keys()) > device_core.COMBO_MAX_KEYS
+                assign_btn.set_sensitive(not over)
+                too_many.set_visible(over)
+
+            def _on_toggle(_toggle):
+                _refresh_limits()
+
+            for toggle, _name in mod_toggles:
+                toggle.connect("toggled", _on_toggle)
+
+            def _on_capture_toggled(btn):
+                armed = btn.get_active()
+                if capture_state["armed"] == armed:
+                    return
+                capture_state["armed"] = armed
+                btn.set_label(_("Listening… (Esc cancels)") if armed
+                              else _("Press a key…"))
+                if armed:
+                    btn.grab_focus()
+
+            capture_btn.connect("toggled", _on_capture_toggled)
+
+            def _fill_from_capture(keys):
+                # Show everything that was detected, even when it is one key too
+                # many: _refresh_limits then explains why Assign is insensitive.
+                for toggle, name in mod_toggles:
+                    toggle.set_active(name in keys)
+                if keys:
+                    _choose_key(keys[-1])
+                _refresh_limits()
+                capture_btn.set_active(False)
+
+            capture_state["fill"] = _fill_from_capture
+            capture_state["disarm"] = lambda: capture_btn.set_active(False)
+
+            def _on_assign(_w):
+                keys = _selected_keys()
+                if not keys:
+                    return
+                # A lone key stays a plain key name -- the existing behaviour.
+                value = keys[0] if len(keys) == 1 else device_core.format_combo(keys)
+                _apply(button_key, value)
+
+            assign_btn.connect("clicked", _on_assign)
+
+        # Show the whole subtree, not just popover_box: the popover's direct
+        # child is the ScrolledWindow, and a hidden child makes Gtk.Bin report
+        # zero preferred size -- the popover would open with nothing in it.
+        popover.show_all()
+        # The ScrolledWindow is reused between opens, so its adjustment carries
+        # the previous position over: the list would open already scrolled past
+        # its header and the Default/Disabled rows at the top.
+        popover_scroll.get_vadjustment().set_value(0.0)
+        if too_many is not None:
+            too_many.set_visible(False)
 
     def _hit_test(x, y):
         view = geom["view"]
@@ -2339,7 +2569,7 @@ def create_buttons_page():
     def on_apply_buttons(btn):
         save_active_profile()
         plan = device_core.ApplyPlan("Buttons")
-        plan.add(["--buttons", build_buttons_arg(app_state["button_mapping"], get_device_caps())])
+        device_core.add_buttons(plan, get_device_caps(), app_state["button_mapping"])
         _queue_plan(plan)
 
     apply_btn.connect("clicked", on_apply_buttons)

@@ -29,11 +29,6 @@ from typing import Callable, Iterable, Optional, Union
 # Button helpers
 # ---------------------------------------------------------------------------
 
-#: Canonical names of the mouse buttons/actions a button can be mapped to.
-MOUSE_BUTTON_ACTIONS = ["button1", "button2", "button3", "button4", "button5",
-                        "button6", "button7", "button8", "button9"]
-SPECIAL_ACTIONS = ["dpi", "scrollup", "scrolldown", "disabled"]
-
 #: Human readable labels for button assignment values (UI chips/popovers).
 ACTION_LABELS = {
     "button1": "Left click",
@@ -78,30 +73,238 @@ _FALLBACK_KEYS = [
 ]
 
 
-def keyboard_keys() -> list[str]:
-    """Return the keyboard keys offered by the qwerty layout."""
+#: Grouping of the offered keys, in the order the groups are shown. Members are
+#: rivalcfg qwerty key names; a name no group claims falls into "Other" rather
+#: than disappearing from the list. The ids are English msgids, translated by
+#: the UI.
+KEY_GROUPS = [
+    ("Letters", [chr(c) for c in range(ord("A"), ord("Z") + 1)]),
+    ("Numbers", ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0"]),
+    ("Editing", ["Enter", "Escape", "BackSpace", "Tab", "Space", "Delete",
+                 "CapsLock"]),
+    ("Punctuation", ["-", "=", "[", "]", "\\", ";", "'", "`", ",", ".", "/"]),
+    ("Function keys", ["F%d" % i for i in range(1, 25)]),
+    ("Navigation", ["PrintScreen", "ScrollLock", "PauseBreak", "NumLock",
+                    "ContextMenu", "Insert", "Home", "PageUp", "End",
+                    "PageDown", "Left", "Right", "Up", "Down"]),
+    ("Modifiers", ["LeftCtrl", "LeftShift", "LeftAlt", "LeftSuper",
+                   "RightCtrl", "RightShift", "RightAlt", "RightSuper"]),
+]
+
+
+def _key_is_offered(name: str) -> bool:
+    """Whether a layout name belongs in the picker.
+
+    Drops the keypad, the international ``\\(inter)`` key, and ``#`` -- on a
+    qwerty layout that is Shift+3, not a physical key of its own.
+    """
+    if "(" in name or ")" in name or name.startswith("Keypad"):
+        return False
+    return name != "#"
+
+
+def _layout_table() -> dict:
+    """Canonical rivalcfg key name -> HID usage code, or ``{}`` if unavailable."""
     try:
         from rivalcfg.handlers.buttons import layout_qwerty  # type: ignore
 
-        names = set(layout_qwerty.layout.keys())
-        names.update(layout_qwerty.aliases.keys())
+        return {name: int(code) for name, code in layout_qwerty.layout.items()}
     except Exception:
-        return list(_FALLBACK_KEYS)
-    # Keep it to a sane, human-usable subset.
-    result = []
-    for name in sorted(names):
-        if "(" in name or ")" in name:
-            continue
-        if name.startswith("Keypad"):
-            continue
-        if name in ("\\", "#", "`"):
-            continue
-        result.append(name)
-    return result
+        return {}
+
+
+def keyboard_groups() -> list[tuple[str, list[str]]]:
+    """Offered keys as ``[(group_id, [key, ...]), ...]``, in keyboard order.
+
+    Sorting by HID usage code reproduces the order the keys sit in on a
+    keyboard -- letters A-Z, digits, editing keys, punctuation, function keys,
+    navigation, then the modifiers -- rather than an alphabetical string sort
+    that puts ``'`` first and ``F1`` before ``F2``.
+    """
+    table = _layout_table()
+    offered = [name for name in table if _key_is_offered(name)]
+    if not offered:
+        table = {}
+        offered = list(_FALLBACK_KEYS)
+
+    def _order(name):
+        return table.get(name, 0xFFFF)
+
+    groups = []
+    claimed = set()
+    for group_id, members in KEY_GROUPS:
+        present = sorted((n for n in offered if n in set(members)), key=_order)
+        if present:
+            groups.append((group_id, present))
+            claimed.update(present)
+    rest = sorted((n for n in offered if n not in claimed), key=_order)
+    if rest:
+        groups.append(("Other", rest))
+    return groups
+
+
+def keyboard_keys() -> list[str]:
+    """Return the keyboard keys offered by the qwerty layout, in keyboard order."""
+    return [name for _group_id, names in keyboard_groups() for name in names]
+
+
+#: Modifier keys a combination can be built from, in the order they are
+#: emitted (modifiers first, then the key). Left variants only.
+COMBO_MODIFIERS = [
+    ("LeftCtrl", "Ctrl"),
+    ("LeftShift", "Shift"),
+    ("LeftAlt", "Alt"),
+    ("LeftSuper", "Super"),
+]
+
+#: One button field holds at most four HID usage codes. Bounded by the packet
+#: itself -- ``<type 1B> <param 4B>`` -- and confirmed by rivalcfg's capture
+#: ``51 E0 E5 06 00`` (LeftCtrl + RightShift + C).
+COMBO_MAX_KEYS = 4
+
+#: Short forms for modifier names, for chips and the popover.
+_MODIFIER_LABELS = {
+    "leftctrl": "Ctrl", "rightctrl": "Ctrl",
+    "leftshift": "Shift", "rightshift": "Shift",
+    "leftalt": "Alt", "rightalt": "Alt",
+    "leftsuper": "Super", "rightsuper": "Super",
+}
+
+
+def is_combo(value) -> bool:
+    """True for a combination value such as ``"LeftCtrl+LeftShift+C"``."""
+    return isinstance(value, str) and "+" in value
+
+
+def parse_combo(value: str) -> list[str]:
+    """Split a combination value into its canonical key names."""
+    return [part for part in (p.strip() for p in str(value).split("+")) if part]
+
+
+def format_combo(keys: Iterable[str]) -> str:
+    """Canonical value string for *keys* (modifiers first, then the key)."""
+    return "+".join(keys)
+
+
+def combo_label(value: str) -> str:
+    """Human readable combination, e.g. ``"Ctrl + Shift + C"``."""
+    return " + ".join(_MODIFIER_LABELS.get(k.lower(), k) for k in parse_combo(value))
+
+
+def keyboard_layout() -> dict:
+    """rivalcfg's qwerty name -> HID usage table, lowercased, or ``{}``."""
+    try:
+        from rivalcfg.handlers.buttons import buttons as handler  # type: ignore
+
+        return handler.build_layout(handler.layout_qwerty)
+    except Exception:
+        return {}
+
+
+def combo_codes(keys: Iterable[str]) -> list[int]:
+    """HID usage codes for a combination, from rivalcfg's own key table.
+
+    Raises ``ValueError`` for a name the layout does not know, so an
+    unencodable combination is a loud failure rather than a wrong packet.
+    """
+    layout = keyboard_layout()
+    if not layout:
+        raise ValueError("rivalcfg keyboard layout is not available")
+    codes = []
+    for key in keys:
+        code = layout.get(str(key).lower())
+        if code is None:
+            raise ValueError("Unknown key '%s'" % key)
+        codes.append(int(code))
+    return codes
+
+
+#: rivalcfg key name -> X11 keysym name, for the keys whose name is not already
+#: the keysym name (letters, digits and F1..F24 are; these are not). Used to
+#: turn a physical key press into a key name.
+KEY_SYMBOL_NAMES = {
+    "Enter": "Return", "Escape": "Escape", "BackSpace": "BackSpace",
+    "Tab": "Tab", "Space": "space", "CapsLock": "Caps_Lock",
+    "PrintScreen": "Print", "ScrollLock": "Scroll_Lock", "PauseBreak": "Pause",
+    "Insert": "Insert", "Home": "Home", "PageUp": "Page_Up", "Delete": "Delete",
+    "End": "End", "PageDown": "Page_Down", "Right": "Right", "Left": "Left",
+    "Down": "Down", "Up": "Up", "NumLock": "Num_Lock", "ContextMenu": "Menu",
+    "-": "minus", "=": "equal", "[": "bracketleft", "]": "bracketright",
+    "\\": "backslash", ";": "semicolon", "'": "apostrophe", "`": "grave",
+    ",": "comma", ".": "period", "/": "slash", "#": "numbersign",
+    "LeftCtrl": "Control_L", "RightCtrl": "Control_R",
+    "LeftShift": "Shift_L", "RightShift": "Shift_R",
+    "LeftAlt": "Alt_L", "RightAlt": "Alt_R",
+    "LeftSuper": "Super_L", "RightSuper": "Super_R",
+    "Keypad/": "KP_Divide", "Keypad*": "KP_Multiply", "Keypad-": "KP_Subtract",
+    "Keypad+": "KP_Add", "KeypadEnter": "KP_Enter", "Keypad.": "KP_Decimal",
+    "Keypad,": "KP_Separator", "Keypad=": "KP_Equal",
+}
+
+#: Keysym names produced by a shifted key on a qwerty layout -> the key it sits
+#: on. GTK reports the shifted symbol (Shift+1 arrives as ``"exclam"``) and the
+#: Shift itself comes from the event's modifier state.
+SHIFTED_SYMBOLS = {
+    "exclam": "1", "at": "2", "numbersign": "3", "dollar": "4", "percent": "5",
+    "asciicircum": "6", "ampersand": "7", "asterisk": "8", "parenleft": "9",
+    "parenright": "0", "underscore": "-", "plus": "=", "braceleft": "[",
+    "braceright": "]", "bar": "\\", "colon": ";", "quotedbl": "'",
+    "less": ",", "greater": ".", "question": "/", "asciitilde": "`",
+}
+
+#: Keysyms that only report a modifier being held. A capture waits for the real
+#: key instead of binding the modifier on its own.
+MODIFIER_SYMBOLS = frozenset([
+    "Control_L", "Control_R", "Shift_L", "Shift_R",
+    "Alt_L", "Alt_R", "Meta_L", "Meta_R", "Super_L", "Super_R",
+    "Hyper_L", "Hyper_R", "ISO_Level3_Shift",
+])
+
+#: X11 spellings ``Gdk.keyval_name()`` never emits but other toolkits use,
+#: mapped to the keysym name it does emit.
+_KEY_SYMBOL_ALIASES = {"Prior": "Page_Up", "Next": "Page_Down"}
+
+
+def key_symbol_name(name: str) -> str:
+    """X11 keysym name for a rivalcfg key name (``"A"`` -> ``"a"``)."""
+    if name in KEY_SYMBOL_NAMES:
+        return KEY_SYMBOL_NAMES[name]
+    if len(name) == 1 and name.isascii() and name.isalpha():
+        return name.lower()
+    if name.startswith("Keypad") and len(name) == 7:
+        return "KP_" + name[6]
+    return name
+
+
+def is_modifier_symbol(symbol: str) -> bool:
+    """True when *symbol* is a bare modifier name from ``Gdk.keyval_name()``."""
+    return symbol in MODIFIER_SYMBOLS
+
+
+def key_for_symbol(symbol: str) -> "str | None":
+    """rivalcfg key name for a keysym name from ``Gdk.keyval_name()``, or ``None``.
+
+    Letters match whichever case the shift state produced (GTK reports ``"S"``
+    while Shift is held), and a shifted symbol folds back onto the key it sits
+    on. Unknown keysyms -- media keys, dead keys, keys from another group --
+    return ``None`` so the caller can ignore the press.
+    """
+    if not symbol:
+        return None
+    symbol = _KEY_SYMBOL_ALIASES.get(symbol, symbol)
+    for name in keyboard_keys():
+        keysym = key_symbol_name(name)
+        if keysym == symbol:
+            return name
+        if len(keysym) == 1 and keysym.lower() == symbol.lower():
+            return name
+    return SHIFTED_SYMBOLS.get(symbol)
 
 
 def action_label(value: str) -> str:
     """Human readable label for a button assignment value."""
+    if is_combo(value):
+        return combo_label(value)
     if value in ACTION_LABELS:
         return ACTION_LABELS[value]
     for canonical, label in MULTIMEDIA_ACTIONS:
@@ -217,29 +420,6 @@ class DeviceCaps:
     @property
     def has_lighting(self) -> bool:
         return self.lighting.has_any
-
-    def button_action_values(self) -> list[str]:
-        """Ordered list of assignment values the device accepts."""
-        values: list[str] = []
-        # Mouse buttons
-        for b in self.buttons:
-            if b.key.startswith("button") and b.key not in values:
-                # A button can be mapped to any mouse button of the device.
-                pass
-        for name in MOUSE_BUTTON_ACTIONS:
-            if name in self.button_keys and name not in values:
-                values.append(name)
-        if any(b.key == "button6" for b in self.buttons):
-            pass
-        if "dpi" not in values and self.raw_settings.get("buttons_mapping", {}).get("button_dpi_switch") is not None:
-            values.append("dpi")
-        if "scrollup" in self.button_keys:
-            values.append("scrollup")
-        if "scrolldown" in self.button_keys:
-            values.append("scrolldown")
-        values.append("disabled")
-        return values
-
 
 def _first_long_cli(cli: Iterable[str]) -> str:
     """Pick the primary long option from a profile ``cli`` list."""
@@ -741,11 +921,187 @@ def add_sensitivity(
     return plan
 
 
+def mapping_has_combo(caps: DeviceCaps, mapping: dict) -> bool:
+    """True when any button in *mapping* is assigned a key combination."""
+    mapping = mapping or {}
+    return any(is_combo(mapping.get(cap.key, cap.default)) for cap in caps.buttons)
+
+
+def buttons_library_step(
+    caps: DeviceCaps,
+    mapping: dict,
+    save: bool = True,
+    mouse_factory: Optional[Callable[[], object]] = None,
+) -> Optional[Callable[[], "tuple[bool, str]"]]:
+    """Return a plan step that writes the button mapping, combinations included.
+
+    The CLI cannot express a combination: rivalcfg's buttons handler writes
+    exactly one key byte per button (``packet[offset] = button_keyboard;
+    packet[offset + 1] = keyboard_layout[value]``). The field itself is
+    ``<BindingType 1B> <Param 4B>`` and Param is a list of HID usage codes, so
+    the hardware holds up to four keys at once. flozz's captures on a Rival 650
+    (issue #171) -- ``LCtrl + C -> 51 E0 06 00 00`` and
+    ``LCtrl + RShift + C -> 51 E0 E5 06 00`` -- and the same encoding measured
+    on an Aerox 5 Wireless.
+
+    Returns ``None`` when library writes are disabled or the mapping holds no
+    combination, so callers can fall back to the CLI argv.
+
+    :param caps: device capabilities (button keys, labels and offsets).
+    :param mapping: canonical ``button_key -> value`` mapping.
+    :param save: persist to the mouse's internal memory.
+    :param mouse_factory: injection seam for tests; defaults to
+                          ``rivalcfg.get_first_mouse()``, matching the CLI
+                          runner, which never passes ``--device``.
+    """
+    if not USE_LIBRARY_WRITES:
+        return None
+
+    mapping = dict(mapping or {})
+    combos = {
+        cap.key: parse_combo(mapping.get(cap.key, cap.default))
+        for cap in caps.buttons
+        if is_combo(mapping.get(cap.key, cap.default))
+    }
+    if not combos:
+        return None
+
+    def _get_mouse():
+        if mouse_factory is not None:
+            return mouse_factory()
+        from rivalcfg import get_first_mouse  # type: ignore
+
+        return get_first_mouse()
+
+    def set_buttons() -> "tuple[bool, str]":
+        """Write the mapping, hand-encoding each combination (never raises)."""
+        logging.info(
+            "set_buttons (library): combos=%s save=%s",
+            {k: format_combo(v) for k, v in combos.items()},
+            save,
+        )
+        mouse = None
+        try:
+            from rivalcfg.handlers import buttons as handler  # type: ignore
+            from rivalcfg.helpers import merge_bytes  # type: ignore
+
+            mouse = _get_mouse()
+            profile = getattr(mouse, "mouse_profile", None) or {}
+            si = (profile.get("settings") or {}).get("buttons_mapping")
+            if not si:
+                return False, "This device profile has no button mapping"
+            button_keyboard = si.get("button_keyboard")
+            if button_keyboard is None:
+                return False, "This device profile cannot send keyboard keys"
+            field_length = int(si.get("button_field_length") or 5)
+
+            # process_value cannot encode a combination, so feed it each
+            # combination's last key -- a valid single key -- and overwrite
+            # that button's whole field with the real codes afterwards.
+            sent = {}
+            for cap in caps.buttons:
+                value = mapping.get(cap.key, cap.default)
+                if is_combo(value):
+                    sent[cap.key] = parse_combo(value)[-1]
+                elif value is not None and value != "":
+                    sent[cap.key] = value
+            sent["layout"] = "qwerty"
+            packet = handler.process_value(si, {"buttons": sent})
+
+            for cap in caps.buttons:
+                keys = combos.get(cap.key)
+                if not keys:
+                    continue
+                codes = combo_codes(keys)
+                if len(codes) > COMBO_MAX_KEYS:
+                    return False, "'%s' has %d keys; the mouse holds at most %d" % (
+                        combo_label(format_combo(keys)), len(codes), COMBO_MAX_KEYS,
+                    )
+                field = [int(button_keyboard)] + codes
+                field += [0x00] * (field_length - len(field))
+                offset = int((si.get("buttons", {}).get(cap.label) or {}).get("offset", cap.offset))
+                packet[offset:offset + field_length] = field[:field_length]
+
+            writer = getattr(mouse, "_hid_write", None)
+            if writer is None:
+                return False, "This rivalcfg version cannot write raw packets"
+            writer(
+                report_type=si["report_type"],
+                data=merge_bytes(si["command"], packet),
+            )
+            if save:
+                mouse.save()
+            return True, ""
+        except ImportError:
+            return False, "rivalcfg library is not importable"
+        except AttributeError as exc:
+            # Private API drift: ``Mouse._hid_write`` moved or changed shape.
+            return False, "This rivalcfg version cannot write raw packets (%s)" % exc
+        except Exception as exc:
+            return False, "%s: %s" % (_library_error_hint(exc), exc)
+        finally:
+            if mouse is not None:
+                try:
+                    mouse.close()
+                except Exception:  # pragma: no cover - defensive
+                    logging.debug("mouse.close() failed", exc_info=True)
+
+    return set_buttons
+
+
+def _unavailable_buttons_step() -> Callable[[], "tuple[bool, str]"]:
+    """A step that fails loudly, for a combination with the library switched off."""
+
+    def set_buttons_unavailable() -> "tuple[bool, str]":
+        return False, (
+            "Key combinations need the rivalcfg library, but library writes are "
+            "disabled (RIVALCFG_GUI_FORCE_CLI=1)"
+        )
+
+    return set_buttons_unavailable
+
+
+def add_buttons(
+    plan: ApplyPlan,
+    caps: DeviceCaps,
+    mapping: dict,
+    save: bool = True,
+    merge_into: Optional[list] = None,
+) -> ApplyPlan:
+    """Append the buttons write to *plan* -- library step if needed, else CLI argv.
+
+    Single source of truth for every buttons write path. A mapping without a
+    combination goes through the CLI exactly as before. One with a combination
+    needs the library, so rather than hand the CLI a value it would reject,
+    forced-CLI mode adds a step that says so.
+
+    :param merge_into: an argv list to append the ``--buttons`` flag to instead
+                       of adding a step of its own. ``build_full_plan`` passes
+                       its shared batch so a combination-free apply keeps the
+                       exact invocation it always had. Ignored for a
+                       combination, which cannot be merged (it is not argv).
+    """
+    if not caps.buttons:
+        return plan
+    if mapping_has_combo(caps, mapping):
+        step = buttons_library_step(caps, mapping, save=save)
+        plan.add(step if step is not None else _unavailable_buttons_step())
+    elif merge_into is not None:
+        merge_into.extend(["--buttons", build_buttons_arg(caps, mapping)])
+    else:
+        plan.add(["--buttons", build_buttons_arg(caps, mapping)])
+    return plan
+
+
 def build_buttons_arg(caps: DeviceCaps, mapping: dict) -> str:
     """Build the rivalcfg ``--buttons`` argument from a canonical mapping.
 
     Single source of truth for every apply path (fixes the duplicate inline
     builder and the KeyError on trimmed profiles -- P1).
+
+    Raises ``ValueError`` on a key combination: the CLI validator would only
+    reject it later with ``Unknown button, key or action``. ``add_buttons``
+    guarantees this is never called with one.
     """
     mapping = mapping or {}
     parts = []
@@ -753,6 +1109,11 @@ def build_buttons_arg(caps: DeviceCaps, mapping: dict) -> str:
         value = mapping.get(cap.key, cap.default)
         if value is None or value == "":
             value = cap.default
+        if is_combo(value):
+            raise ValueError(
+                "%s is a key combination; the rivalcfg CLI cannot express it"
+                % combo_label(value)
+            )
         parts.append(f"{cap.key}={value}")
     parts.append("layout=qwerty")
     return "buttons(" + "; ".join(parts) + ")"
@@ -1105,8 +1466,12 @@ def build_full_plan(caps: DeviceCaps, state: dict) -> ApplyPlan:
     if polling:
         leading.extend(["--polling-rate", str(int(polling))])
     mapping = state.get("buttons")
-    if mapping is not None and caps.buttons:
-        leading.extend(["--buttons", build_buttons_arg(caps, mapping)])
+    if mapping is not None:
+        # A key combination cannot ride in the CLI batch -- it needs the library
+        # -- so it becomes its own step ahead of the batch; anything else keeps
+        # the single shared invocation.
+        add_buttons(plan, caps, mapping, save=state.get("save", True),
+                    merge_into=leading)
 
     zones = state.get("zones") or {}
     for zone in caps.lighting.zones:

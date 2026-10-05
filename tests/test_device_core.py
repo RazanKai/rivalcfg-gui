@@ -1,5 +1,6 @@
 """Tests for device_core: capabilities, plans and the command queue."""
 
+import copy
 import os
 import sys
 import threading
@@ -198,10 +199,18 @@ def lib_on(monkeypatch):
 class _FakeMouse:
     """Minimal stand-in for ``rivalcfg.mouse.Mouse`` (library write path)."""
 
-    def __init__(self, fail_on=None):
+    def __init__(self, fail_on=None, profile=None, raw_writes=True):
         self.calls = []
         self.closed = False
         self.fail_on = fail_on
+        self.mouse_profile = _aerox5_profile() if profile is None else profile
+        if raw_writes:
+            self._hid_write = self._record_hid_write
+
+    def _record_hid_write(self, report_type=None, data=None):
+        self.calls.append(("_hid_write", report_type, list(data or [])))
+        if self.fail_on == "_hid_write":
+            raise OSError("[Errno 19] No such device")
 
     def set_sensitivity(self, values, selected_preset=None):
         self.calls.append(("set_sensitivity", list(values), selected_preset))
@@ -216,6 +225,26 @@ class _FakeMouse:
     def close(self):
         self.closed = True
         self.calls.append(("close",))
+
+
+def _written_fields(mouse):
+    """The raw packet from the last library write, split into button fields.
+
+    Returns ``(command, fields)`` where ``fields[offset]`` is the 5 bytes the
+    profile places at *offset* -- i.e. exactly what the mouse receives.
+
+    On the real ``Mouse`` the save command also goes through ``_hid_write``, so
+    pick the packet write by length rather than by order.
+    """
+    writes = [c for c in mouse.calls if c[0] == "_hid_write"]
+    assert writes, "no library write reached the mouse"
+    si = mouse.mouse_profile["settings"]["buttons_mapping"]
+    command = [b & 0xFF for b in si["command"]]
+    _, _report_type, data = max(writes, key=lambda c: len(c[2]))
+    assert data[:len(command)] == command, "packet is not prefixed by the command"
+    length = int(si["button_field_length"])
+    body = data[len(command):]
+    return command, {off: body[off:off + length] for off in range(0, len(body), length)}
 
 
 def test_lighting_plan_canonical_order(caps):
@@ -272,6 +301,188 @@ def test_build_buttons_arg_partial_mapping_does_not_raise(caps):
     assert "button2=button2" in arg
 
 
+def test_build_buttons_arg_rejects_a_combination(caps):
+    """The CLI validator would only say "Unknown button, key or action"."""
+    with pytest.raises(ValueError) as err:
+        dc.build_buttons_arg(caps, {"button8": "LeftCtrl+C"})
+    assert "combination" in str(err.value)
+
+
+# ---------------------------------------------------------------------------
+# Key combinations (the CLI cannot express them -- see the captures below)
+# ---------------------------------------------------------------------------
+
+def test_combo_values_round_trip():
+    assert dc.is_combo("LeftCtrl+C") is True
+    assert dc.is_combo("C") is False
+    assert dc.is_combo(None) is False
+    assert dc.parse_combo("LeftCtrl+LeftShift+C") == ["LeftCtrl", "LeftShift", "C"]
+    assert dc.format_combo(["LeftCtrl", "C"]) == "LeftCtrl+C"
+    assert dc.combo_label("LeftCtrl+LeftShift+C") == "Ctrl + Shift + C"
+    # A combination renders through the ordinary label helper too, so chips
+    # and the popover need no special case.
+    assert dc.action_label("LeftCtrl+C") == "Ctrl + C"
+    assert dc.action_label("disabled") == "Disabled"
+
+
+def test_combo_codes_come_from_rivalcfg_own_layout():
+    assert dc.combo_codes(["LeftCtrl", "LeftShift", "C"]) == [0xE0, 0xE1, 0x06]
+    with pytest.raises(ValueError):
+        dc.combo_codes(["Nope"])
+
+
+@pytest.mark.parametrize("value,expected", [
+    # flozz's packet captures on a Rival 650, issue #171 (2021-12-13).
+    ("LeftCtrl+C", [0x51, 0xE0, 0x06, 0x00, 0x00]),
+    ("LeftCtrl+RightShift+C", [0x51, 0xE0, 0xE5, 0x06, 0x00]),
+])
+def test_combo_packet_matches_the_rival_650_captures(caps, lib_on, value, expected):
+    """Pin the encoding to real hardware evidence, not to a reading of it.
+
+    ``0x51`` is the profile's ``button_keyboard``; the rest are HID usage codes
+    for the keys, left to right, with unused slots zero.
+    """
+    mouse = _FakeMouse()
+    step = dc.buttons_library_step(caps, {"button8": value}, mouse_factory=lambda: mouse)
+    assert step is not None
+    ok, out = step()
+    assert ok is True, out
+    _command, fields = _written_fields(mouse)
+    assert fields[35] == expected          # Button8's field
+
+
+def test_combo_step_leaves_every_other_field_to_the_handler(caps, lib_on):
+    """Only the combination's own 5 bytes bypass ``process_value``."""
+    mouse = _FakeMouse()
+    dc.buttons_library_step(
+        caps,
+        {"button7": "A", "button8": "LeftCtrl+C"},
+        mouse_factory=lambda: mouse,
+    )()
+    _command, fields = _written_fields(mouse)
+    assert fields[0] == [0x01, 0x00, 0x00, 0x00, 0x00]     # Button1 default
+    assert fields[25] == [0x30, 0x00, 0x00, 0x00, 0x00]    # Button6 default (dpi)
+    assert fields[30] == [0x51, 0x04, 0x00, 0x00, 0x00]    # Button7 = A
+    assert fields[45] == [0x31, 0x00, 0x00, 0x00, 0x00]    # ScrollUp default
+
+
+def test_combo_step_writes_and_saves_then_closes(caps, lib_on):
+    mouse = _FakeMouse()
+    ok, out = dc.buttons_library_step(caps, {"button8": "LeftCtrl+C"},
+                                      mouse_factory=lambda: mouse)()
+    assert ok is True and out == ""
+    assert ("save",) in mouse.calls
+    assert mouse.closed is True
+    _report_type = [c for c in mouse.calls if c[0] == "_hid_write"][0][1]
+    assert _report_type == 2               # the profile's OUTPUT report
+
+
+def test_combo_step_save_false_skips_save(caps, lib_on):
+    mouse = _FakeMouse()
+    ok, _ = dc.buttons_library_step(caps, {"button8": "LeftCtrl+C"}, save=False,
+                                    mouse_factory=lambda: mouse)()
+    assert ok is True
+    assert ("save",) not in mouse.calls
+    assert mouse.closed is True
+
+
+def test_combo_step_returns_none_without_a_combination(caps, lib_on):
+    """Nothing to do for the library: the ordinary argv path handles it."""
+    assert dc.buttons_library_step(caps, {"button8": "disabled"}) is None
+    assert dc.buttons_library_step(caps, {}) is None
+
+
+def test_combo_step_returns_none_when_library_writes_are_off(caps, cli_only):
+    assert dc.buttons_library_step(caps, {"button8": "LeftCtrl+C"}) is None
+
+
+def test_combo_step_never_raises_on_missing_device(caps, lib_on):
+    def factory():
+        raise OSError("[Errno 19] No such device")
+
+    ok, out = dc.buttons_library_step(caps, {"button8": "LeftCtrl+C"},
+                                      mouse_factory=factory)()
+    assert ok is False and "turned on" in out
+
+
+def test_combo_step_never_raises_when_the_write_fails(caps, lib_on):
+    mouse = _FakeMouse(fail_on="_hid_write")
+    ok, out = dc.buttons_library_step(caps, {"button8": "LeftCtrl+C"},
+                                      mouse_factory=lambda: mouse)()
+    assert ok is False and "turned on" in out
+    assert mouse.closed is True
+
+
+def test_combo_step_reports_a_rivalcfg_without_raw_writes(caps, lib_on):
+    mouse = _FakeMouse(raw_writes=False)
+    ok, out = dc.buttons_library_step(caps, {"button8": "LeftCtrl+C"},
+                                      mouse_factory=lambda: mouse)()
+    assert ok is False and "raw packets" in out
+
+
+def test_combo_step_refuses_a_device_without_keyboard_keys(caps, lib_on):
+    profile = copy.deepcopy(_aerox5_profile())
+    profile["settings"]["buttons_mapping"]["button_keyboard"] = None
+    mouse = _FakeMouse(profile=profile)
+    ok, out = dc.buttons_library_step(caps, {"button8": "LeftCtrl+C"},
+                                      mouse_factory=lambda: mouse)()
+    assert ok is False and "keyboard keys" in out
+
+
+def test_combo_step_refuses_more_keys_than_the_field_holds(caps, lib_on):
+    """Four HID codes is the field's ceiling -- ``<type 1B> <param 4B>``."""
+    mouse = _FakeMouse()
+    too_many = "LeftCtrl+LeftShift+LeftAlt+LeftSuper+C"
+    ok, out = dc.buttons_library_step(caps, {"button8": too_many},
+                                      mouse_factory=lambda: mouse)()
+    assert ok is False and "at most 4" in out
+    assert not [c for c in mouse.calls if c[0] == "_hid_write"]
+
+
+def test_combo_step_reports_an_unknown_key_loudly(caps, lib_on):
+    """An unencodable name must be a loud failure, never a wrong packet.
+
+    ``process_value`` rejects the placeholder if the *last* key is unknown; a
+    bad *modifier* gets past it, so ``combo_codes`` has to catch that one.
+    """
+    for value, bad_name in (("LeftCtrl+Nope", "nope"), ("Bogus+LeftCtrl", "bogus")):
+        mouse = _FakeMouse()
+        ok, out = dc.buttons_library_step(caps, {"button8": value},
+                                          mouse_factory=lambda: mouse)()
+        assert ok is False and bad_name in out.lower()
+        assert not [c for c in mouse.calls if c[0] == "_hid_write"]
+
+
+# ---------------------------------------------------------------------------
+# add_buttons: one routing decision for every write path
+# ---------------------------------------------------------------------------
+
+def test_add_buttons_routes_a_combination_to_the_library(caps, lib_on):
+    plan = dc.add_buttons(dc.ApplyPlan("Buttons"), caps, {"button8": "LeftCtrl+C"})
+    assert len(plan.steps) == 1 and callable(plan.steps[0])
+    assert "--buttons" not in _all_flags(plan)
+
+
+def test_add_buttons_routes_a_plain_mapping_to_the_cli(caps, lib_on):
+    plan = dc.add_buttons(dc.ApplyPlan("Buttons"), caps, {"button8": "disabled"})
+    assert plan.steps == [["--buttons", dc.build_buttons_arg(caps, {"button8": "disabled"})]]
+
+
+def test_add_buttons_fails_loudly_when_a_combination_has_no_library(caps, cli_only):
+    """Better an error than a CLI write that silently drops the other keys."""
+    plan = dc.add_buttons(dc.ApplyPlan("Buttons"), caps, {"button8": "LeftCtrl+C"})
+    assert len(plan.steps) == 1 and callable(plan.steps[0])
+    ok, out = plan.steps[0]()
+    assert ok is False
+    assert "RIVALCFG_GUI_FORCE_CLI" in out
+
+
+def test_add_buttons_is_a_no_op_without_buttons(caps, lib_on):
+    bare = dc.DeviceCaps(source="library")
+    plan = dc.add_buttons(dc.ApplyPlan("Buttons"), bare, {"button1": "disabled"})
+    assert plan.steps == []
+
+
 # ---------------------------------------------------------------------------
 # Full plan
 # ---------------------------------------------------------------------------
@@ -313,6 +524,31 @@ def test_full_plan_library_dpi_step_first_without_cli_flag(caps, lib_on):
 def test_full_plan_no_dpi_leaves_no_library_step(caps):
     plan = dc.build_full_plan(caps, {"polling": 500})
     assert plan.steps and not any(callable(s) for s in plan.steps)
+
+
+def test_full_plan_combo_is_its_own_step_ahead_of_the_batch(caps, lib_on):
+    plan = dc.build_full_plan(
+        caps,
+        {"polling": 1000, "buttons": {"button8": "LeftCtrl+C"},
+         "zones": {"z1_color": "ff0000"}},
+    )
+    assert callable(plan.steps[0]), "the combination needs the library"
+    assert "--buttons" not in _all_flags(plan)
+    # Everything else still batches into one invocation after it.
+    assert _all_flags(plan)[0] == "--polling-rate"
+    assert "--top-color" in _all_flags(plan)
+
+
+def test_full_plan_plain_buttons_stay_in_the_shared_batch(caps, lib_on):
+    """A combination-free apply keeps the exact invocation it always had."""
+    plan = dc.build_full_plan(
+        caps, {"polling": 1000, "buttons": {"button1": "button1"}},
+    )
+    assert not any(callable(s) for s in plan.steps)
+    assert plan.steps[0] == [
+        "--polling-rate", "1000",
+        "--buttons", dc.build_buttons_arg(caps, {"button1": "button1"}),
+    ]
 
 
 # ---------------------------------------------------------------------------
@@ -629,6 +865,87 @@ def test_keyboard_keys_available():
     assert len(keys) > 20
 
 
+def test_keyboard_keys_are_in_keyboard_order_not_alphabetical():
+    keys = dc.keyboard_keys()
+    # The bug this replaces: a string sort put "'" first and ordered "F1"
+    # before "F10".
+    assert keys[:3] == ["A", "B", "C"]
+    assert keys.index("F1") < keys.index("F10")
+    assert keys.index("F12") < keys.index("F13")
+    assert keys.index("9") < keys.index("0")
+    assert keys.index("Z") < keys.index("1")
+    # The aliases were duplicate junk: same key, second name.
+    for junk in ("bkspace", "bksp", "esc", "del", "minus", "eq", "dash",
+                 "leftbracket", "hash"):
+        assert junk not in keys
+
+
+def test_keyboard_keys_are_grouped_and_nothing_is_dropped():
+    groups = dc.keyboard_groups()
+    assert [gid for gid, _names in groups] == [
+        "Letters", "Numbers", "Editing", "Punctuation", "Function keys",
+        "Navigation", "Modifiers",
+    ]
+    grouped = [name for _gid, names in groups for name in names]
+    assert grouped == dc.keyboard_keys()
+    assert len(grouped) == len(set(grouped)), "a key is offered twice"
+    assert len(grouped) == 100
+    assert set(groups[0][1]) == set("abcdefghijklmnopqrstuvwxyz".upper())
+
+
+def test_key_symbol_names_are_what_gdk_keyval_name_emits():
+    # Gdk.keyval_name() says "Page_Up", never the X11 spelling "Prior"; a
+    # capture table holding "Prior" would silently never match.
+    assert dc.key_symbol_name("PageUp") == "Page_Up"
+    assert dc.key_symbol_name("PageDown") == "Page_Down"
+    assert dc.key_symbol_name("A") == "a"
+    assert dc.key_symbol_name("7") == "7"
+    assert dc.key_symbol_name("F13") == "F13"
+    assert dc.key_symbol_name("LeftCtrl") == "Control_L"
+    assert dc.key_symbol_name("RightSuper") == "Super_R"
+    assert dc.key_symbol_name("Enter") == "Return"
+    assert dc.key_symbol_name("'") == "apostrophe"
+
+
+@pytest.mark.parametrize("name", dc.keyboard_keys())
+def test_every_offered_key_captures_back_to_itself(name):
+    """Pressing any key in the picker must name the same key it offers."""
+    assert dc.key_for_symbol(dc.key_symbol_name(name)) == name
+
+
+def test_capture_accepts_the_spellings_gtk_really_sends():
+    assert dc.key_for_symbol("a") == "A"
+    assert dc.key_for_symbol("A") == "A"        # Shift+letter
+    assert dc.key_for_symbol("Prior") == "PageUp"
+    assert dc.key_for_symbol("Next") == "PageDown"
+    assert dc.key_for_symbol("space") == "Space"
+    assert dc.key_for_symbol("Return") == "Enter"
+
+
+def test_shifted_symbols_fold_onto_the_key_that_makes_them():
+    assert dc.key_for_symbol("exclam") == "1"
+    assert dc.key_for_symbol("parenright") == "0"
+    assert dc.key_for_symbol("underscore") == "-"
+    assert dc.key_for_symbol("plus") == "="
+    assert dc.key_for_symbol("braceleft") == "["
+    assert dc.key_for_symbol("bar") == "\\"
+    assert dc.key_for_symbol("asciitilde") == "`"
+    # "#" is a layout name as well as Shift+3, but it is not offered, so the
+    # shifted reading wins rather than becoming an unreachable key.
+    assert dc.key_for_symbol("numbersign") == "3"
+
+
+def test_capture_ignores_modifiers_and_unnameable_keys():
+    assert dc.is_modifier_symbol("Control_L")
+    assert dc.is_modifier_symbol("Shift_R")
+    assert dc.is_modifier_symbol("Super_L")
+    assert not dc.is_modifier_symbol("a")
+    assert not dc.is_modifier_symbol("Return")
+    # Media keys, dead keys and other layouts' keys are not encodable.
+    for unknown in ("MonBrightnessDown", "Multi_key", "KP_Enter", "", None):
+        assert dc.key_for_symbol(unknown) is None
+
+
 # ---------------------------------------------------------------------------
 # §1 canonical-order matrix (reactive x default-lighting x rainbow)
 # ---------------------------------------------------------------------------
@@ -709,3 +1026,323 @@ def test_migrate_keeps_active_dpi_preset():
     # Garbage falls back to the first preset rather than crashing the page.
     out = dc.migrate_profile({"dpi_values": [400, 800], "dpi_active_index": "x"})
     assert out["dpi_active_index"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Lighting mode -> raw state (the page's single translation point)
+# ---------------------------------------------------------------------------
+
+ZONES = {"z1_color": "ff0000", "z2_color": "00ff00", "z3_color": "0000ff"}
+
+
+def test_mode_steady_keeps_colours_and_asks_for_no_rainbow():
+    out = dc.lighting_mode_state("steady", ZONES)
+    assert out["zones"] == ZONES
+    assert out["rainbow"] is False
+    assert out["default_lighting"] == "off"
+    assert out["reactive"] == "off"
+
+
+def test_mode_steady_keeps_the_wake_value_the_advanced_control_holds():
+    """Steady must not derive the wake value, or that control is dead."""
+    out = dc.lighting_mode_state("steady", ZONES, flash_hex="00ff00",
+                                 wake="reactive-rainbow")
+    assert out["reactive"] == "00ff00"
+    assert out["default_lighting"] == "reactive-rainbow"
+
+
+def test_mode_steady_still_derives_a_sane_wake_when_none_is_given():
+    assert dc.lighting_mode_state(
+        "steady", ZONES, flash_hex="00ff00")["default_lighting"] == "reactive"
+    assert dc.lighting_mode_state(
+        "steady", ZONES)["default_lighting"] == "off"
+
+
+def test_mode_rainbow_carries_its_wake_lighting_with_it():
+    """The rainbow is forgotten on sleep unless the wake lighting asks for it.
+
+    Leaving the two independent is exactly what let the old page build a mouse
+    that goes dark every time it wakes (PLAN.md section 1, matrix row 2).
+    """
+    out = dc.lighting_mode_state("rainbow", ZONES)
+    assert out["rainbow"] is True
+    assert out["default_lighting"] == "rainbow"
+
+
+@pytest.mark.parametrize("mode", list(dc.LIGHTING_MODES))
+def test_no_mode_can_produce_the_dark_trap(mode):
+    """Rainbow on + wake off = no light. No mode may send that pair."""
+    out = dc.lighting_mode_state(mode, ZONES)
+    assert not (out["rainbow"] and out["default_lighting"] == "off")
+
+
+def test_mode_off_blackens_every_zone():
+    out = dc.lighting_mode_state("off", ZONES)
+    assert set(out["zones"]) == set(ZONES)
+    assert set(out["zones"].values()) == {dc.OFF_COLOR}
+    assert out["rainbow"] is False
+    assert out["default_lighting"] == "off"
+
+
+@pytest.mark.parametrize("mode", ["colorshift", "breathe"])
+def test_host_side_modes_seed_the_zones_from_the_palette(mode):
+    """So the mouse settles on real colours when the app closes."""
+    palette = ["ff0000", "00ff00", "0000ff"]
+    out = dc.lighting_mode_state(mode, ZONES, palette=palette)
+    assert out["zones"] == {"z1_color": "ff0000", "z2_color": "00ff00",
+                            "z3_color": "0000ff"}
+    assert out["rainbow"] is False
+
+
+def test_host_side_mode_without_a_palette_keeps_the_zone_colours():
+    out = dc.lighting_mode_state("colorshift", ZONES)
+    assert out["zones"] == ZONES
+
+
+@pytest.mark.parametrize("mode", list(dc.LIGHTING_MODES))
+def test_click_flash_stays_independent_of_the_mode(mode):
+    """PLAN.md section 1: the flash happens iff a reactive colour is set."""
+    off = dc.lighting_mode_state(mode, ZONES, flash_hex="off")
+    on = dc.lighting_mode_state(mode, ZONES, flash_hex="ff00ff")
+    assert off["reactive"] == "off"
+    assert on["reactive"] == "ff00ff"
+
+
+def test_mode_state_feeds_the_lighting_plan(caps):
+    """The translation and the plan agree -- end to end, no CLI needed."""
+    state = dc.lighting_mode_state("rainbow", ZONES, flash_hex="00ff00")
+    plan = dc.build_lighting_plan(caps, state)
+    assert plan.steps[-1] == ["--rainbow-effect"]
+    assert ["--reactive-color", "00ff00"] in plan.steps
+    assert ["--default-lighting", "rainbow"] in plan.steps
+
+
+# ---------------------------------------------------------------------------
+# LightingAnimator (host-side effects)
+# ---------------------------------------------------------------------------
+
+class _FakeAnimMouse:
+    """Records zone writes and, crucially, whether save() was ever called."""
+
+    def __init__(self, fail_on=None):
+        self.calls = []
+        self.closed = False
+        self.fail_on = fail_on
+        self.command_delay = None
+
+    def set_z1_color(self, value):
+        self._write("z1_color", value)
+
+    def set_z2_color(self, value):
+        self._write("z2_color", value)
+
+    def set_z3_color(self, value):
+        self._write("z3_color", value)
+
+    def _write(self, key, value):
+        self.calls.append((key, value))
+        if self.fail_on == key:
+            raise OSError("[Errno 19] No such device")
+
+    def save(self):
+        self.calls.append(("save",))
+
+    def close(self):
+        self.closed = True
+
+
+ANIM_ZONES = ["z1_color", "z2_color", "z3_color"]
+
+
+def _animator(mouse, **kwargs):
+    return dc.LightingAnimator(ANIM_ZONES, mouse_factory=lambda: mouse, **kwargs)
+
+
+def test_animator_writes_each_zone_in_order():
+    mouse = _FakeAnimMouse()
+    anim = _animator(mouse)
+    assert anim.open() == (True, "")
+    assert anim.write(["ff0000", "00ff00", "0000ff"]) == (True, "")
+    assert mouse.calls == [("z1_color", "ff0000"),
+                           ("z2_color", "00ff00"),
+                           ("z3_color", "0000ff")]
+
+
+def test_animator_never_saves_to_the_mouse():
+    """A save per frame would rewrite internal memory twenty times a second."""
+    mouse = _FakeAnimMouse()
+    anim = _animator(mouse)
+    anim.open()
+    for _ in range(5):
+        anim.write(["ff0000", "00ff00", "0000ff"])
+    anim.close()
+    assert not any(c[0] == "save" for c in mouse.calls)
+
+
+def test_animator_lowers_the_command_delay():
+    """The library default caps a three-write frame at ~6 fps."""
+    mouse = _FakeAnimMouse()
+    _animator(mouse).open()
+    assert mouse.command_delay == dc.ANIM_COMMAND_DELAY
+    assert dc.ANIM_COMMAND_DELAY < 0.05
+
+
+def test_animator_write_failure_drops_the_handle():
+    """A dead link must not be retried into -- reopen on the next request."""
+    mouse = _FakeAnimMouse(fail_on="z2_color")
+    anim = _animator(mouse)
+    anim.open()
+    ok, message = anim.write(["ff0000", "00ff00", "0000ff"])
+    assert ok is False
+    assert "Cannot reach the mouse" in message
+    assert anim.active is False
+    assert mouse.closed is True
+
+
+def test_animator_open_failure_is_reported_not_raised():
+    def boom():
+        raise OSError("[Errno 19] No such device")
+
+    anim = dc.LightingAnimator(ANIM_ZONES, mouse_factory=boom)
+    ok, message = anim.open()
+    assert ok is False
+    assert "Cannot reach the mouse" in message
+    assert anim.active is False
+
+
+def test_animator_close_is_idempotent_and_write_after_close_fails():
+    mouse = _FakeAnimMouse()
+    anim = _animator(mouse)
+    anim.open()
+    anim.close()
+    anim.close()
+    assert mouse.closed is True
+    ok, message = anim.write(["ff0000", "00ff00", "0000ff"])
+    assert ok is False
+    assert "not open" in message
+
+
+def test_animator_open_is_a_noop_when_already_open():
+    mouse = _FakeAnimMouse()
+    anim = _animator(mouse)
+    anim.open()
+    assert anim.open() == (True, "")
+    assert anim.active is True
+
+
+def test_animator_start_streams_frames_until_stopped():
+    mouse = _FakeAnimMouse()
+    anim = dc.LightingAnimator(ANIM_ZONES, mouse_factory=lambda: mouse,
+                               frame_interval=0.001)
+    frames = [["ff0000", "00ff00", "0000ff"], ["0000ff", "ff0000", "00ff00"]]
+
+    def provider(t):
+        # Bounded so a broken stop() cannot leave a thread spinning forever.
+        return frames[min(int(t * 1000), len(frames) - 1)]
+
+    assert anim.start(provider) == (True, "")
+    deadline = time.monotonic() + 5.0
+    while len(mouse.calls) < 6 and time.monotonic() < deadline:
+        time.sleep(0.005)
+    anim.stop()
+    assert not anim.animating
+    assert len([c for c in mouse.calls if c[0] == "z1_color"]) >= 2
+    assert not any(c[0] == "save" for c in mouse.calls)
+
+
+def test_animator_stop_leaves_the_resting_colours_on_the_mouse():
+    """Whatever frame the loop died on, the mouse settles on the profile."""
+    mouse = _FakeAnimMouse()
+    anim = dc.LightingAnimator(ANIM_ZONES, mouse_factory=lambda: mouse,
+                               frame_interval=0.001)
+    anim.start(lambda t: ["111111", "222222", "333333"])
+    deadline = time.monotonic() + 5.0
+    while not mouse.calls and time.monotonic() < deadline:
+        time.sleep(0.005)
+    anim.stop(final_hexes=["ff0000", "00ff00", "0000ff"])
+    assert mouse.calls[-3:] == [("z1_color", "ff0000"),
+                                ("z2_color", "00ff00"),
+                                ("z3_color", "0000ff")]
+    assert mouse.closed is True
+
+
+def test_animator_reports_a_dropped_device_and_stops_itself():
+    mouse = _FakeAnimMouse(fail_on="z1_color")
+    anim = dc.LightingAnimator(ANIM_ZONES, mouse_factory=lambda: mouse,
+                               frame_interval=0.001)
+    seen = []
+    anim.start(lambda t: ["ff0000", "00ff00", "0000ff"],
+               on_error=seen.append)
+    deadline = time.monotonic() + 5.0
+    while anim.animating and time.monotonic() < deadline:
+        time.sleep(0.005)
+    assert not anim.animating
+    assert seen and "Cannot reach the mouse" in seen[0]
+    # The handle was dropped, so a later stop does not write into it.
+    ok, _ = anim.stop(final_hexes=["ff0000", "00ff00", "0000ff"])
+    assert ok is True
+
+
+def test_animator_start_failure_reports_rather_than_raises():
+    def boom():
+        raise OSError("[Errno 19] No such device")
+
+    anim = dc.LightingAnimator(ANIM_ZONES, mouse_factory=boom)
+    ok, message = anim.start(lambda t: ["ff0000", "00ff00", "0000ff"])
+    assert ok is False
+    assert "Cannot reach the mouse" in message
+    assert not anim.animating
+
+
+def test_animator_stop_without_start_is_harmless():
+    anim = dc.LightingAnimator(ANIM_ZONES, mouse_factory=_FakeAnimMouse)
+    assert anim.stop() == (True, "")
+    assert not anim.animating
+
+
+# ---------------------------------------------------------------------------
+# Profile migration: the lighting mode survives, and old files get one
+# ---------------------------------------------------------------------------
+
+def _profile(**kw):
+    data = {"schema": 2, "zones": {"z1_color": "ff0000"}}
+    data.update(kw)
+    return dc.migrate_profile(data)
+
+
+def test_migration_keeps_a_stored_mode():
+    assert _profile(lighting_mode="breathe")["lighting_mode"] == "breathe"
+
+
+def test_migration_rejects_an_unknown_mode_by_deriving_one():
+    # A corrupt or hand-edited value must not reach the page as a mode it
+    # cannot render.
+    assert _profile(lighting_mode="disco-inferno",
+                    rainbow=True)["lighting_mode"] == "rainbow"
+
+
+def test_migration_derives_rainbow_for_an_old_profile():
+    """Profiles from before the mode-first page have no mode at all."""
+    assert _profile(rainbow=True)["lighting_mode"] == "rainbow"
+
+
+def test_migration_derives_off_for_an_all_black_profile():
+    out = _profile(zones={"z1_color": "000000", "z2_color": "000000"})
+    assert out["lighting_mode"] == "off"
+
+
+def test_migration_derives_steady_for_anything_else():
+    out = _profile(zones={"z1_color": "ff0000"}, rainbow=False)
+    assert out["lighting_mode"] == "steady"
+
+
+def test_migration_keeps_a_palette_and_speed():
+    out = _profile(fx_palette=["ff0000", "00ff00"], fx_speed=12)
+    assert out["fx_palette"] == ["ff0000", "00ff00"]
+    assert out["fx_speed"] == 12.0
+
+
+def test_migration_drops_a_broken_palette_and_speed():
+    out = _profile(fx_palette="not-a-list", fx_speed="soon")
+    assert "fx_palette" not in out
+    assert "fx_speed" not in out
