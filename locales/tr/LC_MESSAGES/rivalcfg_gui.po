@@ -50,6 +50,72 @@ msgid "Unexpected error"
 msgstr "Beklenmeyen hata"
 
 #: rivalcfg_gui.py:437
+#, c-format
+#: rivalcfg_gui.py
+msgid "Default (%s)"
+msgstr "Varsayılan (%s)"
+
+#: rivalcfg_gui.py
+msgid "Ctrl"
+msgstr "Ctrl"
+
+#: rivalcfg_gui.py
+msgid "Shift"
+msgstr "Shift"
+
+#: rivalcfg_gui.py
+msgid "Alt"
+msgstr "Alt"
+
+#: rivalcfg_gui.py
+msgid "Super"
+msgstr "Super"
+
+#, c-format
+#: rivalcfg_gui.py
+msgid "At most %d keys at once"
+msgstr "Aynı anda en fazla %d tuş"
+
+#: rivalcfg_gui.py
+msgid "Press a key…"
+msgstr "Bir tuşa basın…"
+
+#: rivalcfg_gui.py
+msgid "Listening… (Esc cancels)"
+msgstr "Dinleniyor… (Esc iptal eder)"
+
+#: rivalcfg_gui.py
+msgid "Letters"
+msgstr "Harfler"
+
+#: rivalcfg_gui.py
+msgid "Numbers"
+msgstr "Sayılar"
+
+#: rivalcfg_gui.py
+msgid "Editing"
+msgstr "Düzenleme"
+
+#: rivalcfg_gui.py
+msgid "Punctuation"
+msgstr "Noktalama"
+
+#: rivalcfg_gui.py
+msgid "Function keys"
+msgstr "Fonksiyon tuşları"
+
+#: rivalcfg_gui.py
+msgid "Navigation"
+msgstr "Gezinme"
+
+#: rivalcfg_gui.py
+msgid "Modifiers"
+msgstr "Değiştiriciler"
+
+#: rivalcfg_gui.py
+msgid "Other"
+msgstr "Diğer"
+
 #~ msgid "DPI Settings"
 #~ msgstr "DPI Ayarları"
 

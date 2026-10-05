@@ -50,6 +50,72 @@ msgid "Unexpected error"
 msgstr "Unexpected error"
 
 #: rivalcfg_gui.py:437
+#, c-format
+#: rivalcfg_gui.py
+msgid "Default (%s)"
+msgstr "Default (%s)"
+
+#: rivalcfg_gui.py
+msgid "Ctrl"
+msgstr "Ctrl"
+
+#: rivalcfg_gui.py
+msgid "Shift"
+msgstr "Shift"
+
+#: rivalcfg_gui.py
+msgid "Alt"
+msgstr "Alt"
+
+#: rivalcfg_gui.py
+msgid "Super"
+msgstr "Super"
+
+#, c-format
+#: rivalcfg_gui.py
+msgid "At most %d keys at once"
+msgstr "At most %d keys at once"
+
+#: rivalcfg_gui.py
+msgid "Press a key…"
+msgstr "Press a key…"
+
+#: rivalcfg_gui.py
+msgid "Listening… (Esc cancels)"
+msgstr "Listening… (Esc cancels)"
+
+#: rivalcfg_gui.py
+msgid "Letters"
+msgstr "Letters"
+
+#: rivalcfg_gui.py
+msgid "Numbers"
+msgstr "Numbers"
+
+#: rivalcfg_gui.py
+msgid "Editing"
+msgstr "Editing"
+
+#: rivalcfg_gui.py
+msgid "Punctuation"
+msgstr "Punctuation"
+
+#: rivalcfg_gui.py
+msgid "Function keys"
+msgstr "Function keys"
+
+#: rivalcfg_gui.py
+msgid "Navigation"
+msgstr "Navigation"
+
+#: rivalcfg_gui.py
+msgid "Modifiers"
+msgstr "Modifiers"
+
+#: rivalcfg_gui.py
+msgid "Other"
+msgstr "Other"
+
 #~ msgid "DPI Settings"
 #~ msgstr "DPI Settings"
 
@@ -596,6 +662,128 @@ msgstr "Select this preset as the active DPI (sent to the mouse on Apply)"
 #: rivalcfg_gui.py
 msgid "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
 msgstr "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
+
+#: rivalcfg_gui.py
+#, python-format
+msgid "Effect stopped: %s"
+msgstr "Effect stopped: %s"
+
+#: rivalcfg_gui.py
+msgid "Pick a colour to edit"
+msgstr "Pick a colour to edit"
+
+#: rivalcfg_gui.py
+msgid "MOUSE PREVIEW (front → back)"
+msgstr "MOUSE PREVIEW (front → back)"
+
+#: rivalcfg_gui.py
+msgid "Rainbow"
+msgstr "Rainbow"
+
+#: rivalcfg_gui.py
+msgid "ColorShift"
+msgstr "ColorShift"
+
+#: rivalcfg_gui.py
+msgid "Color Breathe"
+msgstr "Color Breathe"
+
+#: rivalcfg_gui.py
+msgid "Off"
+msgstr "Off"
+
+#: rivalcfg_gui.py
+msgid "One solid colour per zone."
+msgstr "One solid colour per zone."
+
+#: rivalcfg_gui.py
+msgid "Animated sweep the mouse runs by itself."
+msgstr "Animated sweep the mouse runs by itself."
+
+#: rivalcfg_gui.py
+msgid "A palette travelling along the mouse. Runs on this computer, not the mouse."
+msgstr "A palette travelling along the mouse. Runs on this computer, not the mouse."
+
+#: rivalcfg_gui.py
+msgid "The palette fading in and out together. Runs on this computer, not the mouse."
+msgstr "The palette fading in and out together. Runs on this computer, not the mouse."
+
+#: rivalcfg_gui.py
+msgid "LEDs off."
+msgstr "LEDs off."
+
+#: rivalcfg_gui.py
+msgid "LIGHTING MODE"
+msgstr "LIGHTING MODE"
+
+#: rivalcfg_gui.py
+msgid "Rainbow zones"
+msgstr "Rainbow zones"
+
+#: rivalcfg_gui.py
+msgid "PALETTE"
+msgstr "PALETTE"
+
+#: rivalcfg_gui.py
+#, python-format
+msgid "Palette colour %d"
+msgstr "Palette colour %d"
+
+#: rivalcfg_gui.py
+msgid "Speed"
+msgstr "Speed"
+
+#: rivalcfg_gui.py
+msgid "Seconds for one full cycle."
+msgstr "Seconds for one full cycle."
+
+#: rivalcfg_gui.py
+msgid "Runs only while this page is open, and uses the battery faster than a stored colour. The mouse keeps the last colour when it stops."
+msgstr "Runs only while this page is open, and uses the battery faster than a stored colour. The mouse keeps the last colour when it stops."
+
+#: rivalcfg_gui.py
+msgid "ZONE COLORS"
+msgstr "ZONE COLORS"
+
+#: rivalcfg_gui.py
+msgid "Colors look washed out or pink? Set the Dim timer to 0 on the Power page before comparing."
+msgstr "Colors look washed out or pink? Set the Dim timer to 0 on the Power page before comparing."
+
+#: rivalcfg_gui.py
+msgid "CLICK FLASH"
+msgstr "CLICK FLASH"
+
+#: rivalcfg_gui.py
+msgid "Flash colour"
+msgstr "Flash colour"
+
+#: rivalcfg_gui.py
+msgid "Click flash color"
+msgstr "Click flash color"
+
+#: rivalcfg_gui.py
+msgid "The mouse flashes this colour when a button is pressed. It is independent of the lighting mode above."
+msgstr "The mouse flashes this colour when a button is pressed. It is independent of the lighting mode above."
+
+#: rivalcfg_gui.py
+msgid "Advanced"
+msgstr "Advanced"
+
+#: rivalcfg_gui.py
+msgid "Wake lighting: what the mouse shows for a moment just after it wakes from sleep. Normally set by the lighting mode; change it here only if you want the two to differ."
+msgstr "Wake lighting: what the mouse shows for a moment just after it wakes from sleep. Normally set by the lighting mode; change it here only if you want the two to differ."
+
+#: rivalcfg_gui.py
+msgid "Rainbow replaces these colours."
+msgstr "Rainbow replaces these colours."
+
+#: rivalcfg_gui.py
+msgid "The LEDs are off."
+msgstr "The LEDs are off."
+
+#: rivalcfg_gui.py
+msgid "The palette replaces these colours."
+msgstr "The palette replaces these colours."
 
 #~ #: rivalcfg_gui.py
 #~ #, python-brace-format

@@ -50,6 +50,72 @@ msgid "Unexpected error"
 msgstr "意外错误"
 
 #: rivalcfg_gui.py:437
+#, c-format
+#: rivalcfg_gui.py
+msgid "Default (%s)"
+msgstr "默认 (%s)"
+
+#: rivalcfg_gui.py
+msgid "Ctrl"
+msgstr "Ctrl"
+
+#: rivalcfg_gui.py
+msgid "Shift"
+msgstr "Shift"
+
+#: rivalcfg_gui.py
+msgid "Alt"
+msgstr "Alt"
+
+#: rivalcfg_gui.py
+msgid "Super"
+msgstr "Super"
+
+#, c-format
+#: rivalcfg_gui.py
+msgid "At most %d keys at once"
+msgstr "最多同时 %d 个按键"
+
+#: rivalcfg_gui.py
+msgid "Press a key…"
+msgstr "按下一个键…"
+
+#: rivalcfg_gui.py
+msgid "Listening… (Esc cancels)"
+msgstr "正在监听…（Esc 取消）"
+
+#: rivalcfg_gui.py
+msgid "Letters"
+msgstr "字母"
+
+#: rivalcfg_gui.py
+msgid "Numbers"
+msgstr "数字"
+
+#: rivalcfg_gui.py
+msgid "Editing"
+msgstr "编辑"
+
+#: rivalcfg_gui.py
+msgid "Punctuation"
+msgstr "标点"
+
+#: rivalcfg_gui.py
+msgid "Function keys"
+msgstr "功能键"
+
+#: rivalcfg_gui.py
+msgid "Navigation"
+msgstr "导航"
+
+#: rivalcfg_gui.py
+msgid "Modifiers"
+msgstr "修饰键"
+
+#: rivalcfg_gui.py
+msgid "Other"
+msgstr "其他"
+
 #~ msgid "DPI Settings"
 #~ msgstr "DPI 设置"
 

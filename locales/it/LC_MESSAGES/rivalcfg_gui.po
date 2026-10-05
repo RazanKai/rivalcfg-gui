@@ -50,6 +50,72 @@ msgid "Unexpected error"
 msgstr "Errore imprevisto"
 
 #: rivalcfg_gui.py:437
+#, c-format
+#: rivalcfg_gui.py
+msgid "Default (%s)"
+msgstr "Predefinito (%s)"
+
+#: rivalcfg_gui.py
+msgid "Ctrl"
+msgstr "Ctrl"
+
+#: rivalcfg_gui.py
+msgid "Shift"
+msgstr "Maiusc"
+
+#: rivalcfg_gui.py
+msgid "Alt"
+msgstr "Alt"
+
+#: rivalcfg_gui.py
+msgid "Super"
+msgstr "Super"
+
+#, c-format
+#: rivalcfg_gui.py
+msgid "At most %d keys at once"
+msgstr "Al massimo %d tasti alla volta"
+
+#: rivalcfg_gui.py
+msgid "Press a key…"
+msgstr "Premi un tasto…"
+
+#: rivalcfg_gui.py
+msgid "Listening… (Esc cancels)"
+msgstr "In ascolto… (Esc annulla)"
+
+#: rivalcfg_gui.py
+msgid "Letters"
+msgstr "Lettere"
+
+#: rivalcfg_gui.py
+msgid "Numbers"
+msgstr "Numeri"
+
+#: rivalcfg_gui.py
+msgid "Editing"
+msgstr "Modifica"
+
+#: rivalcfg_gui.py
+msgid "Punctuation"
+msgstr "Punteggiatura"
+
+#: rivalcfg_gui.py
+msgid "Function keys"
+msgstr "Tasti funzione"
+
+#: rivalcfg_gui.py
+msgid "Navigation"
+msgstr "Navigazione"
+
+#: rivalcfg_gui.py
+msgid "Modifiers"
+msgstr "Modificatori"
+
+#: rivalcfg_gui.py
+msgid "Other"
+msgstr "Altri"
+
 #~ msgid "DPI Settings"
 #~ msgstr "Impostazioni DPI"
 
