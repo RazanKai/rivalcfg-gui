@@ -758,6 +758,275 @@ def build_buttons_arg(caps: DeviceCaps, mapping: dict) -> str:
     return "buttons(" + "; ".join(parts) + ")"
 
 
+#: Lighting modes the UI offers.  ``steady``, ``rainbow`` and ``off`` are
+#: things the firmware does by itself; ``colorshift`` and ``breathe`` are
+#: animated on the host (see :mod:`lighting_fx`), because the mouse cannot
+#: store them -- the same split SteelSeries GG uses.
+LIGHTING_MODES = ("steady", "rainbow", "colorshift", "breathe", "off")
+
+#: The all-off colour.  ``rgbcolor`` has no "off" keyword -- only the reactive
+#: handler accepts one -- so a zone is extinguished by asking for black.
+OFF_COLOR = "000000"
+
+
+def lighting_mode_state(mode, zones, flash_hex=None, palette=None,
+                        wake=None) -> dict:
+    """The raw lighting state that *mode* means.
+
+    The page shows one effect; the device takes four interacting flags.  This
+    is the one place that translation happens, kept pure so it can be tested
+    without a display -- ``PLAN.md`` §1's send order is untouched.
+
+    Returns the same keys ``build_lighting_plan`` consumes: ``zones``,
+    ``reactive``, ``default_lighting``, ``rainbow``.
+
+    Three of the choices matter beyond bookkeeping:
+
+    * ``rainbow`` also sets ``default_lighting`` to ``"rainbow"``.  The rainbow
+      is a flag the mouse forgets on sleep unless the wake lighting asks for it
+      back, and leaving the two independent is what let the old page build a
+      mouse that goes dark every time it wakes (§1 matrix, row 2).
+    * ``steady`` keeps *wake* -- the value the Advanced control holds -- rather
+      than deriving one.  A mode that overwrote it would make that control dead,
+      which is the defect this page exists to fix; a wake value the user cannot
+      influence is exactly the "dropdown that does nothing" problem.
+    * the host-side effects seed ``zones`` from the palette, so the mouse is
+      left showing sensible static colours when the app closes and the
+      animation stops -- rather than whatever frame it happened to die on.
+    """
+    zones = dict(zones or {})
+    flash = flash_hex if flash_hex and flash_hex != "off" else None
+    reactive = flash or "off"
+
+    if mode == "off":
+        # Off means off: no wake animation either, or the LED would come back
+        # on the next time the mouse woke.
+        return {
+            "zones": {key: OFF_COLOR for key in zones},
+            "reactive": reactive,
+            "default_lighting": "off",
+            "rainbow": False,
+        }
+
+    if mode == "rainbow":
+        return {
+            "zones": zones,
+            "reactive": reactive,
+            "default_lighting": "rainbow",
+            "rainbow": True,
+        }
+
+    if mode in ("colorshift", "breathe"):
+        seeds = list(palette or ())
+        seeded = {
+            key: seeds[i % len(seeds)]
+            for i, key in enumerate(zones)
+        } if seeds else dict(zones)
+        # "off" here means "no wake animation", not "dark": these modes leave
+        # the rainbow flag down and the zones lit, so the seeded colour shows.
+        return {
+            "zones": seeded,
+            "reactive": reactive,
+            "default_lighting": "off",
+            "rainbow": False,
+        }
+
+    # Steady, and anything unrecognised: the colours the user picked, and the
+    # wake lighting exactly as the Advanced control has it.
+    if wake is None:
+        wake = "reactive" if flash else "off"
+    return {
+        "zones": zones,
+        "reactive": reactive,
+        "default_lighting": str(wake),
+        "rainbow": False,
+    }
+
+
+#: Seconds the animator waits between HID writes.  ``Mouse._hid_write`` sleeps
+#: once per write and a frame is three writes, so this is the frame rate: the
+#: library's default 0.05 s would cap the animation at ~6 fps and the default
+#: is chosen to land nearer 20.  The library's own floor is 0.001 s and its
+#: docstring warns that too-fast writes "can hang the device", so this is
+#: deliberately between the two and is the knob to lower only if the hardware
+#: proves it can take it.
+ANIM_COMMAND_DELAY = 0.016
+
+#: Seconds between frames.  A frame costs three writes at ``command_delay``,
+#: so this only has to be the *ceiling* on the rate -- the writes themselves
+#: are the floor.  Slightly above the write cost so the loop is paced by the
+#: sleep rather than spinning.
+ANIM_FRAME_INTERVAL = 0.05
+
+
+class LightingAnimator:
+    """Streams host-side effect frames to the mouse over one held HID handle.
+
+    GG's ColorShift and Multi Color Breathe are animated on the PC and never
+    written to the mouse, so parity means doing the same here.  The obvious
+    route -- the debounced CLI queue -- cannot do it: every step is a
+    ``rivalcfg`` subprocess, which costs far more than a frame.  Holding one
+    library handle open and writing the three zones directly is what makes the
+    frame rate possible.
+
+    ``save()`` is deliberately never called.  The mouse persists settings only
+    when asked (``save_command``), and an animation that saved would rewrite
+    the device's internal memory twenty times a second -- wearing it out to
+    store a colour that is about to change anyway, and fighting the CLI apply
+    path over what "the saved state" even is.
+
+    :meth:`start` runs the frame loop on a **worker thread**, not on a GLib
+    timeout.  A frame blocks for three ``command_delay`` sleeps (~48 ms), and
+    doing that from a main-loop callback would stall the whole GUI at 20 times
+    a second; the main loop only ever hands frames over as data.  The GUI still
+    owns *when* the animation runs -- :meth:`start` and :meth:`stop` are the
+    map/unmap hooks -- it just does not tick the frames itself.
+    """
+
+    def __init__(self, zone_keys, mouse_factory=None,
+                 command_delay=ANIM_COMMAND_DELAY,
+                 frame_interval=ANIM_FRAME_INTERVAL):
+        self._zone_keys = list(zone_keys)
+        self._mouse_factory = mouse_factory
+        self._command_delay = command_delay
+        self._frame_interval = frame_interval
+        self._mouse = None
+        self._thread = None
+        self._stop = threading.Event()
+        self.last_error = ""
+
+    @property
+    def active(self) -> bool:
+        """True while the device handle is held open."""
+        return self._mouse is not None
+
+    def _get_mouse(self):
+        if self._mouse_factory is not None:
+            return self._mouse_factory()
+        from rivalcfg import get_first_mouse  # type: ignore
+
+        return get_first_mouse()
+
+    def open(self) -> "tuple[bool, str]":
+        """Take the device handle.  Returns (ok, message); never raises."""
+        if self._mouse is not None:
+            return True, ""
+        if not USE_LIBRARY_WRITES:
+            return False, "library writes are disabled"
+        try:
+            mouse = self._get_mouse()
+        except ImportError:
+            return False, "rivalcfg library is not importable"
+        except Exception as exc:
+            return False, "%s: %s" % (_library_error_hint(exc), exc)
+        try:
+            mouse.command_delay = self._command_delay
+        except Exception:  # pragma: no cover - defensive
+            logging.debug("could not set command_delay", exc_info=True)
+        self._mouse = mouse
+        logging.info("animator opened (%s zones, delay=%.3fs)",
+                     len(self._zone_keys), self._command_delay)
+        return True, ""
+
+    def write(self, hexes) -> "tuple[bool, str]":
+        """Write one frame -- the zone colours, in order.  Never saves."""
+        if self._mouse is None:
+            return False, "animator is not open"
+        try:
+            for key, value in zip(self._zone_keys, hexes):
+                getattr(self._mouse, "set_" + key)(value)
+            return True, ""
+        except Exception as exc:
+            message = "%s: %s" % (_library_error_hint(exc), exc)
+            self.last_error = message
+            # A failed write usually means the mouse went to sleep or the link
+            # dropped.  Drop the handle rather than retrying into a dead one --
+            # the GUI stops the animation and reopens if the user asks again.
+            self.close()
+            return False, message
+
+    def close(self):
+        """Release the device handle.  Safe to call when not open."""
+        mouse, self._mouse = self._mouse, None
+        if mouse is not None:
+            try:
+                mouse.close()
+            except Exception:  # pragma: no cover - defensive
+                logging.debug("animator close failed", exc_info=True)
+
+    @property
+    def animating(self) -> bool:
+        """True while the frame loop is running."""
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, provider, on_error=None) -> "tuple[bool, str]":
+        """Begin streaming frames from *provider* on a worker thread.
+
+        *provider* is called with the elapsed seconds and returns the frame's
+        zone colours (one hex per zone, in order).  Keeping the colour maths
+        outside is what lets this class stay ignorant of ``lighting_fx`` -- and
+        it means the GUI can drive the 3D preview from the *same* function the
+        mouse is being painted with.
+
+        ``on_error(message)`` is called **from the worker thread** if the
+        device disappears mid-animation; the caller marshals it back to its own
+        main loop.  Returns (ok, message) for the opening, which never raises.
+        """
+        if self.animating:
+            return True, ""
+        ok, message = self.open()
+        if not ok:
+            return False, message
+        self._stop.clear()
+        self._thread = threading.Thread(
+            target=self._run, args=(provider, on_error),
+            name="lighting-animator", daemon=True)
+        self._thread.start()
+        return True, ""
+
+    def _run(self, provider, on_error):
+        start = time.monotonic()
+        while not self._stop.is_set():
+            try:
+                frame = provider(time.monotonic() - start)
+            except Exception as exc:  # pragma: no cover - defensive
+                logging.warning("animation provider failed: %s", exc)
+                break
+            ok, message = self.write(frame)
+            if not ok:
+                # write() has already dropped the handle; the mouse is gone or
+                # asleep.  Stop rather than reopening into a dead link.
+                if on_error is not None:
+                    try:
+                        on_error(message)
+                    except Exception:  # pragma: no cover - defensive
+                        logging.debug("animator error callback failed",
+                                      exc_info=True)
+                break
+            # An Event, not time.sleep, so stop() interrupts the wait instead
+            # of the caller blocking for up to a frame after asking to stop.
+            self._stop.wait(self._frame_interval)
+
+    def stop(self, final_hexes=None) -> "tuple[bool, str]":
+        """Stop the loop, optionally leaving *final_hexes* on the mouse, and
+        release the handle.  Safe to call when not running.
+
+        The final frame is what keeps the mouse from freezing mid-fade when the
+        animation ends: the caller passes the resting colours the profile
+        describes (see :func:`lighting_mode_state`), not whatever frame the
+        loop happened to be on.
+        """
+        self._stop.set()
+        thread, self._thread = self._thread, None
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=2.0)
+        result = (True, "")
+        if final_hexes is not None and self._mouse is not None:
+            result = self.write(final_hexes)
+        self.close()
+        return result
+
+
 def build_lighting_plan(caps: DeviceCaps, state: dict) -> ApplyPlan:
     """Canonical lighting plan.
 
@@ -1068,6 +1337,35 @@ def migrate_profile(data) -> Optional[dict]:
             out["led_brightness"] = int(data["led_brightness"])
         except (TypeError, ValueError):
             pass
+
+    # The lighting mode arrived with the mode-first RGB page.  A profile from
+    # before it has none, so derive one from the raw flags it does have --
+    # otherwise every old profile would open as Steady and silently drop the
+    # rainbow it was saved with.
+    mode = data.get("lighting_mode")
+    if mode not in LIGHTING_MODES:
+        if out["rainbow"]:
+            mode = "rainbow"
+        elif out["zones"] and all(
+                str(v).lower() in ("000000", "off", "disable")
+                for v in out["zones"].values()):
+            mode = "off"
+        else:
+            mode = "steady"
+    out["lighting_mode"] = mode
+
+    palette = data.get("fx_palette")
+    if isinstance(palette, list):
+        # Stored as given; lighting_fx.normalize_palette repairs the count and
+        # the colour forms, so this only has to keep the strings.
+        out["fx_palette"] = [str(v) for v in palette if isinstance(v, str) and v]
+    speed = data.get("fx_speed")
+    if speed is not None:
+        try:
+            out["fx_speed"] = float(speed)
+        except (TypeError, ValueError):
+            pass
+
     if isinstance(data.get("device_hint"), dict):
         out["device_hint"] = data["device_hint"]
     return out

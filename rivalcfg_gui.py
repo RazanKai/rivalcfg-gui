@@ -9,6 +9,7 @@ import gettext
 import locale
 import logging
 import re
+import time
 from logging.handlers import TimedRotatingFileHandler
 
 def _get_locale_dir():
@@ -47,6 +48,7 @@ except ImportError:
     sys.exit(1)
 
 import device_core
+import lighting_fx
 import widgets
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
@@ -227,15 +229,24 @@ def _current_zones():
 
 
 def _current_lighting_state():
-    """Lighting state dict consumed by device_core.build_lighting_plan()."""
-    return {
-        "zones": _current_zones(),
-        "reactive": app_state.get("reactive_hex", "off"),
-        "default_lighting": app_state.get("default_lighting"),
-        "rainbow": app_state.get("rainbow_enabled", False),
-        "rainbow_value": app_state.get("rainbow_value"),
-        "light_effect": app_state.get("selected_effect"),
-    }
+    """Lighting state dict consumed by device_core.build_lighting_plan().
+
+    The four device flags are *derived* from the lighting mode rather than read
+    off four independent widgets -- ``lighting_mode_state`` is the single place
+    that translation happens, so no combination of UI state can build a mouse
+    that goes dark on wake (PLAN.md §1, matrix row 2).  ``app_state["zones"]``
+    stays the colours the user picked; the mode decides what is actually sent.
+    """
+    state = device_core.lighting_mode_state(
+        app_state.get("lighting_mode") or "steady",
+        _current_zones(),
+        flash_hex=app_state.get("reactive_hex", "off"),
+        palette=app_state.get("fx_palette"),
+        wake=app_state.get("default_lighting"),
+    )
+    state["rainbow_value"] = app_state.get("rainbow_value")
+    state["light_effect"] = app_state.get("selected_effect")
+    return state
 
 
 def current_apply_state():
@@ -263,6 +274,9 @@ def save_profile(name):
         "rainbow_value": app_state.get("rainbow_value", ""),
         "default_lighting": app_state.get("default_lighting", ""),
         "light_effect": app_state.get("selected_effect", ""),
+        "lighting_mode": app_state.get("lighting_mode", "steady"),
+        "fx_palette": list(app_state.get("fx_palette") or []),
+        "fx_speed": app_state.get("fx_speed", lighting_fx.SPEED_DEFAULT),
         "button_mapping": app_state.get("button_mapping", {}),
     }
     if app_state.get("led_brightness") is not None:
@@ -324,6 +338,14 @@ button {
     border: 1px solid #2a2a40;
     border-radius: 6px;
     padding: 6px 16px;
+}
+
+/* The blanket rule above also covers toggles, hiding the theme's checked
+   styling: an active Ctrl/Shift/Alt/Super toggle looked exactly like an
+   inactive one, so a key capture filled them in invisibly. */
+button:checked {
+    background: #40240c;
+    border: 1px solid #ff7800;
 }
 
 entry {
@@ -1195,8 +1217,53 @@ def _debounce_plan(key, plan):
     return _init_command_queue().enqueue_debounced(key, plan)
 
 
+#: The rainbow effect is a *shift*: the sweep slides along the body, so the
+#: preview has to keep moving.  Two rates are in play and this one is the hue
+#: cycle -- the rate the eye reads as "how fast is it changing colour".  It is
+#: deliberately slow (15 s, 24 deg/s); at 4 s it flashed.  The sweep the eye
+#: actually follows, one colour crossing the mouse, takes
+#: ``_RAINBOW_TURNS * _RAINBOW_PERIOD_MS`` = 3 s, since a phase turn moves the
+#: pattern 1/_RAINBOW_TURNS body lengths.  The tick only sets how smooth the
+#: drift is.  A tick is a full redraw of ~200 slabs (~17 ms), so this pair is
+#: also what sets what the animation costs; see the note in WORKLOG.
+_RAINBOW_PERIOD_MS = 15000
+_RAINBOW_TICK_MS = 80
+_RAINBOW_STEP = _RAINBOW_TICK_MS / float(_RAINBOW_PERIOD_MS)
+
+
+def repaint_rgb_preview():
+    """Repaint the RGB page's 3D preview, if the page has been built.
+
+    The preview paints from live state, so a repaint is all anything outside
+    the page needs in order to change what it shows.  The rainbow shift is
+    started or stopped here too: it only runs while the rainbow is showing and
+    the preview is actually on screen.
+    """
+    area = app_state.get("_rgb_strip")
+    if area is None:
+        return
+    sync = app_state.get("_rgb_sync_shift")
+    if sync is not None:
+        sync()
+    area.queue_draw()
+
+
 def create_rgb_page():
-    """Create the RGB Lighting page (capability-driven, embedded colour editor)."""
+    """Create the RGB Lighting page.
+
+    One card, and one thing that names an effect: the Lighting mode.  The zone
+    colours, the palette and the raw wake value are all *consequences* of that
+    choice and are shown as such -- the colours grey out when the mode replaces
+    them, the raw ``--default-lighting`` value moves into a collapsed Advanced
+    section, and nothing on the page offers two names for one effect.
+
+    The old page drew the four hardware groups as four independent sections,
+    which is how it could be read as an effects list -- "On Wake" held four
+    effect-looking names of which one was inert and two were duplicates, and
+    "Rainbow" sat in its own card, silently overriding the colours above it.
+    The device really does take four interacting flags (§1), so the interaction
+    is now expressed once, in ``device_core.lighting_mode_state``.
+    """
     caps = get_device_caps()
     lighting = caps.lighting
     page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
@@ -1237,13 +1304,126 @@ def create_rgb_page():
     app_state["reactive_color_saved"] = app_state.get("reactive_color_saved", "00ff00")
     app_state["rainbow_enabled"] = False
     app_state["rainbow_value"] = lighting.rainbow_default
-    app_state["default_lighting"] = lighting.default_lighting_default or (
-        "rainbow" if lighting.has_default_lighting else ""
-    )
+    # The wake value starts neutral where the page owns a Rainbow mode: this
+    # device's factory value is "rainbow", so inheriting it would put a rainbow
+    # sweep on a mouse the user has just set to Steady -- the mode would be
+    # saying one thing and the LED another.  Advanced can put it back.
+    app_state["default_lighting"] = (
+        "off" if lighting.has_rainbow
+        else lighting.default_lighting_default or "off"
+    ) if lighting.has_default_lighting else ""
     app_state["selected_effect"] = lighting.light_effect_default or "steady"
+    # The mode is the page's own state; everything the device takes is derived
+    # from it by lighting_mode_state(), so it must survive a rebuild.
+    if app_state.get("lighting_mode") not in device_core.LIGHTING_MODES:
+        app_state["lighting_mode"] = "steady"
+    app_state["fx_palette"] = lighting_fx.normalize_palette(app_state.get("fx_palette"))
+    try:
+        app_state["fx_speed"] = float(app_state.get("fx_speed"))
+    except (TypeError, ValueError):
+        app_state["fx_speed"] = lighting_fx.SPEED_DEFAULT
+
+    def _live_zones():
+        # Read through app_state, not the closure: a factory reset rebinds
+        # app_state["zones"] to a fresh dict, and the closure would go stale.
+        return app_state.get("zones") or zones
+
+    def _raw_state():
+        """The four device flags the current mode means (PLAN.md §1)."""
+        return device_core.lighting_mode_state(
+            app_state.get("lighting_mode") or "steady",
+            _live_zones(),
+            flash_hex=app_state.get("reactive_hex", "off"),
+            palette=app_state.get("fx_palette"),
+            wake=app_state.get("default_lighting"),
+        )
+
+    # -- Host-side effects ---------------------------------------------------
+    #
+    # ColorShift and Multi Color Breathe are the two GG effects the mouse
+    # cannot store; GG animates them on the PC and so does this.  They need at
+    # least one zone to paint and the library write path (a subprocess per
+    # frame is far too slow to animate) -- without either, the page simply
+    # does not offer them, rather than offering a mode that cannot run.
+    anim_zone_keys = [z.key for z in lighting.zones[:3]]
+    # A device that names its own effects (a Rival 3 class) has no Lighting
+    # mode selector for the host-side ones to sit in, so it gets neither the
+    # modes nor the animator behind them.
+    can_animate = (bool(anim_zone_keys) and device_core.USE_LIBRARY_WRITES
+                   and not lighting.has_light_effect)
+    animator = (device_core.LightingAnimator(anim_zone_keys)
+                if can_animate else None)
+    app_state["_rgb_animator"] = animator
+
+    def _anim_effect():
+        mode = app_state.get("lighting_mode") or "steady"
+        return mode if mode in lighting_fx.FX_EFFECTS else None
+
+    def _anim_resting_hexes(effect):
+        """The colours to leave on the mouse when *effect* stops animating.
+
+        The same static seed the profile describes, so the mouse settles on
+        something that matches the saved state instead of freezing mid-fade.
+        """
+        if effect not in lighting_fx.FX_EFFECTS:
+            return None
+        seeded = device_core.lighting_mode_state(
+            effect, _live_zones(), palette=app_state.get("fx_palette"))["zones"]
+        return [seeded.get(key, "000000") for key in anim_zone_keys]
+
+    def _anim_provider(t):
+        # Same function the 3D preview paints from, so what is on screen is
+        # what is on the mouse.
+        return lighting_fx.to_hex(lighting_fx.colours_at(
+            _anim_effect(), app_state.get("fx_palette"),
+            app_state.get("fx_speed"), t, zones=len(anim_zone_keys)))
+
+    strip = None  # set below, if the device has zones
+
+    def _animation_ready():
+        return (animator is not None and _anim_effect()
+                and strip is not None and strip.get_mapped())
+
+    def _start_animation():
+        if animator is None or animator.animating or not _animation_ready():
+            return
+        ok, message = animator.start(_anim_provider,
+                                     on_error=lambda m: GLib.idle_add(_animation_failed, m))
+        if not ok:
+            GLib.idle_add(_animation_failed, message)
+
+    def _stop_animation(restore=True, effect=None):
+        if animator is None or not animator.animating:
+            return
+        final = _anim_resting_hexes(effect if effect is not None else _anim_effect()) if restore else None
+        animator.stop(final_hexes=final)
+
+    def _restart_animation(previous_effect=None):
+        if animator is None:
+            return
+        # Leave the *previous* effect's resting colours, not the new mode's --
+        # the new mode is about to be written by its own plan.
+        _stop_animation(restore=True, effect=previous_effect)
+        _start_animation()
+
+    def _animation_failed(message):
+        """The device went away mid-animation: stop claiming an effect."""
+        logging.warning("lighting animation stopped: %s", message)
+        set_status("error", _("Effect stopped: %s") % message)
+        app_state["lighting_mode"] = "steady"
+        app_state["rainbow_enabled"] = False
+        _sync_mode_widgets()
+        _update_mode_dependent_ui()
+        repaint_rgb_preview()
+        return False
 
     def auto_apply_lighting():
         if app_state.get("_loading_profile") or not app_state["settings"].get("auto_apply"):
+            return
+        if animator is not None and animator.animating:
+            # The animation is already showing the change; a plan would fight
+            # it for the device.  The values are still held in app_state, so
+            # Apply (or leaving the mode) writes them.
             return
         plan = device_core.build_lighting_plan(caps, _current_lighting_state())
         _debounce_plan("lighting", plan)
@@ -1251,18 +1431,17 @@ def create_rgb_page():
     # -- Embedded colour editor --------------------------------------------
     editor = widgets.ColorEditor(initial_hex="ff6600", on_changed=lambda h: None)
     editor_state = {
-        "target": [None],   # ("zone", key) | ("reactive", None) | (None, None)
+        "target": [None],   # ("zone", key) | ("reactive", None) | ("fx", index)
         "widgets": {},      # key -> ColorSwatch
     }
 
     def _apply_editor_color(hexv):
         kind, key = editor_state["target"]
         if kind == "zone":
-            zones[key] = hexv
+            _live_zones()[key] = hexv
             sw = editor_state["widgets"].get(key)
             if sw is not None:
                 sw.set_hex(hexv)
-            strip = app_state.get("_rgb_strip")
             if strip is not None:
                 strip.queue_draw()
         elif kind == "reactive":
@@ -1274,6 +1453,16 @@ def create_rgb_page():
                 app_state["reactive_hex"] = hexv
             else:
                 app_state["reactive_hex"] = "off"
+        elif kind == "fx":
+            palette = app_state.setdefault("fx_palette", [])
+            if not (0 <= key < len(palette)):
+                return
+            palette[key] = hexv
+            sw = editor_state["widgets"].get("fx_%d" % key)
+            if sw is not None:
+                sw.set_hex(hexv)
+            if strip is not None:
+                strip.queue_draw()
         else:
             return
         auto_apply_lighting()
@@ -1282,8 +1471,9 @@ def create_rgb_page():
 
     def select_target(kind, key, current_hex, label):
         editor_state["target"] = (kind, key)
+        marker = key if kind != "fx" else "fx_%d" % key
         for k, sw in editor_state["widgets"].items():
-            sw.set_selected(k == key)
+            sw.set_selected(k == marker)
         editor.set_color(current_hex)
         editor_title.set_text(label)
 
@@ -1291,9 +1481,13 @@ def create_rgb_page():
         """Re-sync the editor with the current target after a profile load."""
         kind, key = editor_state["target"]
         if kind == "zone":
-            editor.set_color(zones.get(key, "ff6600"))
+            editor.set_color(_live_zones().get(key, "ff6600"))
         elif kind == "reactive":
             editor.set_color(app_state.get("reactive_color_saved", "00ff00"))
+        elif kind == "fx":
+            palette = app_state.get("fx_palette") or []
+            if 0 <= key < len(palette):
+                editor.set_color(palette[key])
 
     app_state["_color_editor_refresh"] = refresh_editor
 
@@ -1303,61 +1497,407 @@ def create_rgb_page():
     right.pack_start(editor_title, False, False, 0)
     right.pack_start(editor, False, False, 0)
 
-    # -- Vertical strip preview (below the picker) -------------------------
-    def on_strip_press(widget, event):
-        # Click a segment of the vertical strip preview to select that zone.
-        h = widget.get_allocated_height()
-        if not lighting.zones or h <= 0:
+    # -- 3D lighting preview (below the picker) ----------------------------
+    #
+    # The same mouse the Button Mapping page draws, stood upright so the LED
+    # zones read top-to-bottom in the order the lights are actually laid out:
+    # the nose -- under the keycaps -- at the top, the mid-body in the middle,
+    # and the tail, where the visible strip runs, at the bottom.  Clicking a
+    # region selects that zone in the editor, exactly as the old blocks did.
+    import math as _math
+
+    import mouse3d
+
+    #: The zones drawn as regions of the body.  A device with a fourth
+    #: --logo-color zone keeps it selectable from its swatch, but it sits
+    #: under the palm rather than along the length, so it gets no band.
+    band_zones = list(lighting.zones[:3]) if lighting else []
+    _yaw = _math.radians(-120.0)
+    _pitch = _math.radians(42.0)
+    _roll = mouse3d.upright_roll(_yaw, _pitch)
+    geom = {"key": None, "info": None}
+
+    def _zone_colours():
+        # Through the mode, not the raw zone dict: "Off" is three black zones
+        # rather than the colours the swatches still hold, and a preview that
+        # stayed lit while the mouse was dark would be lying about the device.
+        live = _raw_state()["zones"]
+        out = [_hex_to_rgb(live.get(z.key, "ff6600")) for z in band_zones]
+        while len(out) < 3:
+            out.append(out[-1] if out else (1.0, 0.66, 0.0))
+        return out[:3]
+
+    def _rainbow_active():
+        """Is the rainbow effect the one in force right now?
+
+        Two controls ask for it -- the Rainbow lighting mode (devices with a
+        dedicated ``--rainbow`` flag) and the Rainbow light effects (Rival 3
+        class) -- and they are mutually exclusive, so both are read.
+        """
+        if app_state.get("lighting_mode") == "rainbow":
+            return True
+        if not (lighting and lighting.has_light_effect):
+            # This device has no ``--light-effect``: the mode radios above are
+            # the only effect control on the page, so nothing else can be
+            # asking for the rainbow.  ``selected_effect`` is still carried
+            # here -- a profile saved by the old page has ``"light_effect":
+            # "rainbow"`` in it -- but honouring it would light the preview
+            # with the sweep in every mode, including Steady and Off.
             return False
-        idx = int(event.y / (h / len(lighting.zones)))
-        idx = max(0, min(len(lighting.zones) - 1, idx))
-        zone = lighting.zones[idx]
-        select_target("zone", zone.key, zones.get(zone.key, "ff6600"), zone.label)
+        return str(app_state.get("selected_effect") or "").startswith("rainbow")
+
+    #: Where the shift currently is, in turns of the hue circle.  Read at draw
+    #: time, so a tick only has to move it and ask for a frame.
+    anim = {"phase": 0.0, "timer": 0, "host_start": None}
+
+    def _rainbow_at(y):
+        return mouse3d.rainbow_colour(y, anim["phase"])
+
+    def _host_effect_at(y):
+        """Preview colour at position *y* for a host-side effect.
+
+        ``render_lighting`` takes either three flat zone colours or a
+        ``y -> rgb`` callback; this is the callback form, so it has to answer
+        for one station, not return the whole frame -- blending the three zone
+        colours itself is :func:`mouse3d.zone_colour`'s job.
+
+        Sampled at the renderer's own clock rather than the animator's, so a
+        repaint never blocks on the worker thread to find out which frame the
+        mouse is on; both read the same pure function and the same palette, so
+        they stay in step without sharing a counter.
+        """
+        if anim["host_start"] is None:
+            anim["host_start"] = time.monotonic()
+        t = time.monotonic() - anim["host_start"]
+        colours = lighting_fx.colours_at(
+            _anim_effect(), app_state.get("fx_palette"),
+            app_state.get("fx_speed"), t, zones=3)
+        return mouse3d.zone_colour(colours, y)
+
+    def _preview_colours():
+        """Three zone colours, a shifting rainbow, or a host-side effect.
+
+        The rainbow replaces the zone colours with :func:`mouse3d.rainbow_colour`
+        -- one drifting hue across the body rather than the three colours blended
+        -- and it keeps moving, because that *is* the effect; a frozen sweep is
+        not a rainbow, it is a gradient.
+        """
+        if _anim_effect():
+            return _host_effect_at
+        if _rainbow_active():
+            return _rainbow_at
+        return _zone_colours()
+
+    def on_strip_press(widget, event):
+        # Click a region of the mouse to select that zone.
+        info = geom.get("info")
+        if info is None:
+            return False
+        idx = mouse3d.zone_at(info, event.x, event.y)
+        if idx is None or idx >= len(band_zones):
+            return False
+        zone = band_zones[idx]
+        select_target("zone", zone.key, _live_zones().get(zone.key, "ff6600"),
+                      zone.label)
         return True
 
+    def on_strip_draw(widget, cr):
+        w = widget.get_allocated_width()
+        h = widget.get_allocated_height()
+        # Projecting the body is the expensive half and does not depend on the
+        # colours, so cache it: the colour editor redraws on every pointer
+        # motion while a colour is being dragged.
+        if geom["key"] != (w, h) or geom["info"] is None:
+            _view, info = mouse3d.build_lighting_geometry(
+                w, h, view=mouse3d.View(yaw=_yaw, pitch=_pitch, roll=_roll))
+            geom["key"] = (w, h)
+            geom["info"] = info
+        mouse3d.render_lighting(cr, w, h, geom["info"], _preview_colours())
+        return False
+
     if lighting.zones:
-        strip_label = Gtk.Label(label=_("STRIP PREVIEW (top → bottom)"))
+        strip_label = Gtk.Label(label=_("MOUSE PREVIEW (front → back)"))
         strip_label.get_style_context().add_class("card-title")
         strip_label.set_halign(Gtk.Align.START)
         strip_label.set_margin_top(10)
         right.pack_start(strip_label, False, False, 0)
 
         strip = Gtk.DrawingArea()
-        strip.set_size_request(90, 200)
+        strip.set_size_request(260, 340)
         strip.set_halign(Gtk.Align.START)
         strip.get_style_context().add_class("color-preview")
         strip.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         strip.connect("button-press-event", on_strip_press)
-
-        def on_strip_draw(widget, cr):
-            w = widget.get_allocated_width()
-            h = widget.get_allocated_height()
-            n = max(1, len(lighting.zones))
-            seg = h / n
-            for i, zone in enumerate(lighting.zones):
-                r, g, b = _hex_to_rgb(zones.get(zone.key, "ff6600"))
-                cr.set_source_rgb(r, g, b)
-                cr.rectangle(0, i * seg, w, seg)
-                cr.fill()
-            cr.set_line_width(1)
-            cr.set_source_rgba(0, 0, 0, 0.55)
-            for i in range(1, n):
-                cr.move_to(0, i * seg)
-                cr.line_to(w, i * seg)
-            cr.stroke()
-            return False
-
         strip.connect("draw", on_strip_draw)
         right.pack_start(strip, False, False, 0)
         app_state["_rgb_strip"] = strip
 
-    # -- Zone colors --------------------------------------------------------
-    if lighting.zones:
-        colors_title = Gtk.Label(label=_("COLORS"))
-        colors_title.get_style_context().add_class("card-title")
-        colors_title.set_halign(Gtk.Align.START)
-        card.pack_start(colors_title, False, False, 0)
+        def on_shift_tick(widget):
+            if not widget.get_mapped():
+                # A frame nobody is looking at is not worth drawing ~200 slabs
+                # for, and an armed timer would keep waking the process for the
+                # rest of the session.  Stop; the map handler below re-arms it.
+                anim["timer"] = 0
+                return False
+            if not _rainbow_active() and _anim_effect() is None:
+                anim["timer"] = 0
+                return False
+            anim["phase"] = (anim["phase"] + _RAINBOW_STEP) % 1.0
+            widget.queue_draw()
+            return True
 
+        def sync_shift():
+            """Run the preview shift exactly while an effect is on and on screen."""
+            moving = _rainbow_active() or _anim_effect() is not None
+            if moving:
+                if not anim["timer"] and strip.get_mapped():
+                    anim["timer"] = GLib.timeout_add(_RAINBOW_TICK_MS,
+                                                     on_shift_tick, strip)
+            elif anim["timer"]:
+                GLib.source_remove(anim["timer"])
+                anim["timer"] = 0
+                anim["phase"] = 0.0
+            if not moving:
+                anim["host_start"] = None
+            # The hardware animation follows the same rule, plus "the page is
+            # showing": the frame loop holds the device open, so it must not
+            # outlive the page the user has to come back to in order to stop it.
+            if animator is not None:
+                if _anim_effect() and strip.get_mapped():
+                    _start_animation()
+                elif animator.animating:
+                    _stop_animation(restore=True)
+
+        app_state["_rgb_sync_shift"] = sync_shift
+        strip.connect("map", lambda _w: sync_shift())
+        # Leaving the page stops the frames and settles the mouse on its
+        # resting colours -- a hidden page cannot offer a Stop button.
+        strip.connect("unmap", lambda _w: _stop_animation(restore=True))
+
+    # -- Lighting mode ------------------------------------------------------
+    mode_labels = {
+        "steady": _("Steady"),
+        "rainbow": _("Rainbow"),
+        "colorshift": _("ColorShift"),
+        "breathe": _("Color Breathe"),
+        "off": _("Off"),
+    }
+    mode_descs = {
+        "steady": _("One solid colour per zone."),
+        "rainbow": _("Animated sweep the mouse runs by itself."),
+        "colorshift": _("A palette travelling along the mouse. Runs on this "
+                        "computer, not the mouse."),
+        "breathe": _("The palette fading in and out together. Runs on this "
+                     "computer, not the mouse."),
+        "off": _("LEDs off."),
+    }
+    effect_labels = {
+        "steady": _("Steady"),
+        "breath": _("Breath"),
+        "breath-slow": _("Breath (Slow)"),
+        "breath-fast": _("Breath (Fast)"),
+        "rainbow-shift": _("Rainbow Shift"),
+        "rainbow-breath": _("Rainbow Breath"),
+        "disco": _("Disco"),
+    }
+
+    mode_radios = {}
+    app_state["effect_radios"] = {}
+    # Setting the initial radio below fires "toggled" before the widgets the
+    # handler reaches for exist; the page is still being built, so ignore it
+    # and sync the selection explicitly once everything is in place.
+    building = [True]
+    mode_title = Gtk.Label(label=_("LIGHTING MODE"))
+    mode_title.get_style_context().add_class("card-title")
+    mode_title.set_halign(Gtk.Align.START)
+    card.pack_start(mode_title, False, False, 0)
+
+    mode_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    mode_group = None
+
+    def make_mode_row(value, label, desc):
+        nonlocal mode_group
+        rb = Gtk.RadioButton(group=mode_group) if mode_group is not None else Gtk.RadioButton()
+        if mode_group is None:
+            mode_group = rb
+        rb.set_halign(Gtk.Align.START)
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=1)
+        lbl = Gtk.Label(label=label)
+        lbl.set_halign(Gtk.Align.START)
+        text.pack_start(lbl, False, False, 0)
+        if desc:
+            d = Gtk.Label(label=desc)
+            d.set_halign(Gtk.Align.START)
+            d.set_line_wrap(True)
+            d.get_style_context().add_class("setting-desc")
+            text.pack_start(d, False, False, 0)
+        rb.add(text)
+        mode_box.pack_start(rb, False, False, 0)
+        return rb
+
+    if lighting.has_light_effect:
+        # A Rival 3-class device names its own effects; they are the modes here
+        # rather than a second list beside them.
+        choices = lighting.light_effect_choices or list(effect_labels)
+        for value in choices:
+            rb = make_mode_row(value, effect_labels.get(value, value), "")
+            rb.set_active(value == app_state["selected_effect"])
+            app_state["effect_radios"][value] = rb
+
+            def on_effect_toggled(button, val=value):
+                if building[0] or not button.get_active():
+                    return
+                app_state["selected_effect"] = val
+                repaint_rgb_preview()
+                auto_apply_lighting()
+
+            rb.connect("toggled", on_effect_toggled)
+    else:
+        offered = ["steady"]
+        if lighting.has_rainbow:
+            offered.append("rainbow")
+        if can_animate:
+            offered.extend(lighting_fx.FX_EFFECTS)
+        offered.append("off")
+        for value in offered:
+            rb = make_mode_row(value, mode_labels[value], mode_descs[value])
+            if value == app_state["lighting_mode"]:
+                rb.set_active(True)
+            mode_radios[value] = rb
+
+            def on_mode_toggled(button, val=value):
+                if building[0] or not button.get_active():
+                    return
+                set_mode(val)
+
+            rb.connect("toggled", on_mode_toggled)
+
+    card.pack_start(mode_box, False, False, 0)
+
+    def _sync_mode_widgets():
+        rb = mode_radios.get(app_state.get("lighting_mode") or "steady")
+        if rb is not None and not rb.get_active():
+            rb.set_active(True)
+
+    app_state["_rgb_set_mode"] = lambda mode, apply=False: set_mode(mode, apply=apply)
+    app_state["_rgb_sync_mode_widgets"] = _sync_mode_widgets
+
+    def set_mode(mode, apply=True):
+        if mode not in device_core.LIGHTING_MODES:
+            mode = "steady"
+        previous_effect = _anim_effect()
+        changed = app_state.get("lighting_mode") != mode
+        app_state["lighting_mode"] = mode
+        _sync_mode_widgets()
+        app_state["rainbow_enabled"] = _raw_state()["rainbow"]
+        _update_mode_dependent_ui()
+        if changed:
+            if animator is not None:
+                _restart_animation(previous_effect=previous_effect)
+            repaint_rgb_preview()
+            if apply:
+                auto_apply_lighting()
+
+    # -- Rainbow zone subsets (choice-rainbow devices only) -----------------
+    rainbow_options = None
+    if lighting.has_rainbow and lighting.rainbow_kind == "choice" and lighting.rainbow_choices:
+        rainbow_options = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        # show_all() at window-build time would reveal this; visibility has to
+        # belong to the mode alone.
+        rainbow_options.set_no_show_all(True)
+        opt_label = Gtk.Label(label=_("Rainbow zones"))
+        opt_label.set_halign(Gtk.Align.START)
+        rainbow_options.pack_start(opt_label, False, False, 0)
+        rainbow_combo = Gtk.ComboBoxText()
+        for opt in lighting.rainbow_choices:
+            rainbow_combo.append_text(opt)
+        default = lighting.rainbow_default or lighting.rainbow_choices[0]
+        if default in lighting.rainbow_choices:
+            rainbow_combo.set_active(lighting.rainbow_choices.index(default))
+        rainbow_combo.set_halign(Gtk.Align.START)
+        rainbow_options.pack_start(rainbow_combo, False, False, 0)
+        app_state["rainbow_combo"] = rainbow_combo
+
+        def on_rainbow_choice(combo):
+            app_state["rainbow_value"] = combo.get_active_text()
+            auto_apply_lighting()
+
+        rainbow_combo.connect("changed", on_rainbow_choice)
+        card.pack_start(rainbow_options, False, False, 0)
+
+    # -- Palette + speed (host-side effects only) ---------------------------
+    fx_options = None
+    if can_animate:
+        fx_options = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        fx_options.set_no_show_all(True)
+
+        pal_title = Gtk.Label(label=_("PALETTE"))
+        pal_title.get_style_context().add_class("card-title")
+        pal_title.set_halign(Gtk.Align.START)
+        fx_options.pack_start(pal_title, False, False, 0)
+
+        pal_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        palette = app_state["fx_palette"]
+        def _select_palette(idx):
+            live = app_state.get("fx_palette") or []
+            current = live[idx] if idx < len(live) else "ff6600"
+            select_target("fx", idx, current, _("Palette colour %d") % (idx + 1))
+
+        for i, hexv in enumerate(palette):
+            sw = widgets.ColorSwatch(hexv, width=56)
+            sw.connect("clicked", lambda _b, idx=i: _select_palette(idx))
+            pal_row.pack_start(sw, False, False, 0)
+            editor_state["widgets"]["fx_%d" % i] = sw
+        fx_options.pack_start(pal_row, False, False, 0)
+
+        speed_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        speed_label = Gtk.Label(label=_("Speed"))
+        speed_label.set_size_request(160, -1)
+        speed_label.set_halign(Gtk.Align.START)
+        speed_row.pack_start(speed_label, False, False, 0)
+        speed_scale = Gtk.Scale(orientation=Gtk.Orientation.HORIZONTAL)
+        speed_scale.set_range(lighting_fx.SPEED_MIN, lighting_fx.SPEED_MAX)
+        speed_scale.set_increments(0.5, 2.0)
+        speed_scale.set_draw_value(True)
+        speed_scale.set_value(app_state["fx_speed"])
+        speed_scale.set_hexpand(True)
+        speed_scale.set_tooltip_text(_("Seconds for one full cycle."))
+
+        def on_speed(scale):
+            app_state["fx_speed"] = float(scale.get_value())
+            # The animation reads this live, so there is nothing to re-apply;
+            # the 3D preview picks it up on its next frame.
+
+        speed_scale.connect("value-changed", on_speed)
+        speed_row.pack_start(speed_scale, True, True, 0)
+        fx_options.pack_start(speed_row, False, False, 0)
+
+        fx_hint = Gtk.Label(label=_(
+            "Runs only while this page is open, and uses the battery faster "
+            "than a stored colour. The mouse keeps the last colour when it "
+            "stops."))
+        fx_hint.get_style_context().add_class("setting-desc")
+        fx_hint.set_halign(Gtk.Align.START)
+        fx_hint.set_line_wrap(True)
+        fx_options.pack_start(fx_hint, False, False, 0)
+        card.pack_start(fx_options, False, False, 0)
+
+    # -- Zone colors --------------------------------------------------------
+    colors_title = Gtk.Label(label=_("ZONE COLORS"))
+    colors_title.get_style_context().add_class("card-title")
+    colors_title.set_halign(Gtk.Align.START)
+    colors_title.set_margin_top(12)
+    card.pack_start(colors_title, False, False, 0)
+
+    zone_rows = []
+    zone_override_hint = Gtk.Label(label="")
+    zone_override_hint.get_style_context().add_class("setting-desc")
+    zone_override_hint.set_halign(Gtk.Align.START)
+    zone_override_hint.set_line_wrap(True)
+    zone_override_hint.set_no_show_all(True)
+    card.pack_start(zone_override_hint, False, False, 0)
+
+    if lighting.zones:
         color_hint = Gtk.Label(label=_(
             "Colors look washed out or pink? Set the Dim timer to 0 on the "
             "Power page before comparing."))
@@ -1377,25 +1917,27 @@ def create_rgb_page():
 
             swatch = widgets.ColorSwatch(zones.get(zone.key, "ff6600"), width=64)
             swatch.connect("clicked", lambda _b, z=zone: select_target(
-                "zone", z.key, zones.get(z.key, "ff6600"), z.label))
+                "zone", z.key, _live_zones().get(z.key, "ff6600"), z.label))
             row.pack_start(swatch, False, False, 0)
             color_buttons[zone.key] = swatch
             editor_state["widgets"][zone.key] = swatch
             return row
 
         for zone in lighting.zones:
-            card.pack_start(make_zone_row(zone), False, False, 0)
+            row = make_zone_row(zone)
+            zone_rows.append(row)
+            card.pack_start(row, False, False, 0)
 
-    # -- Reactive (standalone) ---------------------------------------------
-    reactive_title = Gtk.Label(label=_("REACTIVE"))
-    reactive_title.get_style_context().add_class("card-title")
-    reactive_title.set_halign(Gtk.Align.START)
-    reactive_title.set_margin_top(12)
+    # -- Click flash (independent of the mode) ------------------------------
     if lighting.has_reactive:
+        reactive_title = Gtk.Label(label=_("CLICK FLASH"))
+        reactive_title.get_style_context().add_class("card-title")
+        reactive_title.set_halign(Gtk.Align.START)
+        reactive_title.set_margin_top(12)
         card.pack_start(reactive_title, False, False, 0)
 
         reactive_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        reactive_label = Gtk.Label(label=_("Click flash"))
+        reactive_label = Gtk.Label(label=_("Flash colour"))
         reactive_label.set_size_request(160, -1)
         reactive_label.set_halign(Gtk.Align.START)
         reactive_row.pack_start(reactive_label, False, False, 0)
@@ -1432,24 +1974,34 @@ def create_rgb_page():
         app_state["_reactive_on"] = False
 
         card.pack_start(reactive_row, False, False, 0)
-        react_hint = Gtk.Label(label=_("Click flash happens only when this is on."))
+        react_hint = Gtk.Label(label=_(
+            "The mouse flashes this colour when a button is pressed. It is "
+            "independent of the lighting mode above."))
         react_hint.get_style_context().add_class("setting-desc")
         react_hint.set_halign(Gtk.Align.START)
+        react_hint.set_line_wrap(True)
         card.pack_start(react_hint, False, False, 0)
 
-    # -- Wake lighting (default lighting) ----------------------------------
+    # -- Advanced: the raw wake value ---------------------------------------
     if lighting.has_default_lighting:
-        wake_title = Gtk.Label(label=_("ON WAKE"))
-        wake_title.get_style_context().add_class("card-title")
-        wake_title.set_halign(Gtk.Align.START)
-        wake_title.set_margin_top(12)
-        card.pack_start(wake_title, False, False, 0)
+        expander = Gtk.Expander(label=_("Advanced"))
+        expander.set_halign(Gtk.Align.START)
+        expander.set_margin_top(12)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        inner.set_margin_start(14)
+        inner.set_margin_top(6)
+
+        wake_hint = Gtk.Label(label=_(
+            "Wake lighting: what the mouse shows for a moment just after it "
+            "wakes from sleep. Normally set by the lighting mode; change it "
+            "here only if you want the two to differ."))
+        wake_hint.get_style_context().add_class("setting-desc")
+        wake_hint.set_halign(Gtk.Align.START)
+        wake_hint.set_line_wrap(True)
+        wake_hint.set_max_width_chars(48)
+        inner.pack_start(wake_hint, False, False, 0)
 
         dl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        dl_label = Gtk.Label(label=_("Wake lighting"))
-        dl_label.set_size_request(160, -1)
-        dl_label.set_halign(Gtk.Align.START)
-        dl_row.pack_start(dl_label, False, False, 0)
         dl_combo = Gtk.ComboBoxText()
         dl_options = list(lighting.default_lighting_choices) or [
             "off", "reactive", "rainbow", "reactive-rainbow"
@@ -1458,8 +2010,11 @@ def create_rgb_page():
             dl_combo.append_text(opt)
         if app_state["default_lighting"] in dl_options:
             dl_combo.set_active(dl_options.index(app_state["default_lighting"]))
-        elif "rainbow" in dl_options:
-            dl_combo.set_active(dl_options.index("rainbow"))
+        elif "off" in dl_options:
+            dl_combo.set_active(dl_options.index("off"))
+        else:
+            dl_combo.set_active(0)
+        dl_combo.set_halign(Gtk.Align.START)
         dl_row.pack_start(dl_combo, False, False, 0)
         app_state["default_lighting_combo"] = dl_combo
 
@@ -1468,88 +2023,49 @@ def create_rgb_page():
             auto_apply_lighting()
 
         dl_combo.connect("changed", on_dl_changed)
-        card.pack_start(dl_row, False, False, 0)
-        wake_hint = Gtk.Label(label=_("Applied when the mouse wakes; it does not change steady colors now."))
-        wake_hint.get_style_context().add_class("setting-desc")
-        wake_hint.set_halign(Gtk.Align.START)
-        card.pack_start(wake_hint, False, False, 0)
+        inner.pack_start(dl_row, False, False, 0)
+        expander.add(inner)
+        card.pack_start(expander, False, False, 0)
 
-    # -- Light effect (Rival 3 class) --------------------------------------
-    if lighting.has_light_effect:
-        effect_title = Gtk.Label(label=_("EFFECT"))
-        effect_title.get_style_context().add_class("card-title")
-        effect_title.set_halign(Gtk.Align.START)
-        effect_title.set_margin_top(12)
-        card.pack_start(effect_title, False, False, 0)
+    def _reveal(widget, visible):
+        """Show or hide a section the mode owns.
 
-        effect_labels = {
-            "steady": _("Steady"),
-            "breath": _("Breath"),
-            "breath-slow": _("Breath (Slow)"),
-            "breath-fast": _("Breath (Fast)"),
-            "rainbow-shift": _("Rainbow Shift"),
-            "rainbow-breath": _("Rainbow Breath"),
-            "disco": _("Disco"),
-        }
-        app_state["effect_radios"] = {}
-        eff_group = None
-        eff_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-        choices = lighting.light_effect_choices or list(effect_labels)
-        for value in choices:
-            name = effect_labels.get(value, value)
-            if eff_group is None:
-                rb = Gtk.RadioButton(label=name)
-                eff_group = rb
-            else:
-                rb = Gtk.RadioButton(label=name, group=eff_group)
-            rb.set_active(value == app_state["selected_effect"])
-            app_state["effect_radios"][value] = rb
+        These sections are ``set_no_show_all`` so the window's ``show_all()``
+        cannot reveal a collapsed one at startup.  That flag also defeats
+        ``show_all()`` *here* -- GTK skips the whole subtree of a widget that
+        carries it -- so revealing has to walk the children itself.
+        """
+        widget.set_visible(visible)
+        if not visible:
+            return
 
-            def on_effect_toggled(button, val=value):
-                if button.get_active():
-                    app_state["selected_effect"] = val
-                    auto_apply_lighting()
+        def show_subtree(w):
+            w.show()
+            if isinstance(w, Gtk.Container):
+                for child in w.get_children():
+                    show_subtree(child)
 
-            rb.connect("toggled", on_effect_toggled)
-            eff_box.pack_start(rb, False, False, 0)
-        card.pack_start(eff_box, False, False, 0)
+        show_subtree(widget)
 
-    # -- Rainbow (always sent LAST in the plan) ----------------------------
-    if lighting.has_rainbow:
-        rainbow_title = Gtk.Label(label=_("RAINBOW"))
-        rainbow_title.get_style_context().add_class("card-title")
-        rainbow_title.set_halign(Gtk.Align.START)
-        rainbow_title.set_margin_top(12)
-        card.pack_start(rainbow_title, False, False, 0)
+    def _update_mode_dependent_ui():
+        mode = app_state.get("lighting_mode") or "steady"
+        reason = {
+            "rainbow": _("Rainbow replaces these colours."),
+            "off": _("The LEDs are off."),
+            "colorshift": _("The palette replaces these colours."),
+            "breathe": _("The palette replaces these colours."),
+        }.get(mode, "")
+        for row in zone_rows:
+            row.set_sensitive(not reason)
+        zone_override_hint.set_text(reason)
+        zone_override_hint.set_visible(bool(reason))
+        host = mode in lighting_fx.FX_EFFECTS
+        if fx_options is not None:
+            _reveal(fx_options, host)
+        if rainbow_options is not None:
+            _reveal(rainbow_options, mode == "rainbow")
 
-        rainbow_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-        rainbow_check = Gtk.CheckButton(label=_("Rainbow effect"))
-        rainbow_check.set_active(False)
-        rainbow_row.pack_start(rainbow_check, False, False, 0)
-        app_state["rainbow_check"] = rainbow_check
-
-        if lighting.rainbow_kind == "choice" and lighting.rainbow_choices:
-            rainbow_combo = Gtk.ComboBoxText()
-            for opt in lighting.rainbow_choices:
-                rainbow_combo.append_text(opt)
-            default = lighting.rainbow_default or lighting.rainbow_choices[0]
-            if default in lighting.rainbow_choices:
-                rainbow_combo.set_active(lighting.rainbow_choices.index(default))
-            rainbow_row.pack_start(rainbow_combo, False, False, 0)
-            app_state["rainbow_combo"] = rainbow_combo
-
-            def on_rainbow_choice(combo):
-                app_state["rainbow_value"] = combo.get_active_text()
-                auto_apply_lighting()
-
-            rainbow_combo.connect("changed", on_rainbow_choice)
-
-        def on_rainbow_toggled(button):
-            app_state["rainbow_enabled"] = button.get_active()
-            auto_apply_lighting()
-
-        rainbow_check.connect("toggled", on_rainbow_toggled)
-        card.pack_start(rainbow_row, False, False, 0)
+    app_state["_rgb_update_mode_ui"] = _update_mode_dependent_ui
 
     # -- Apply --------------------------------------------------------------
     apply_btn = Gtk.Button(label=_("APPLY"))
@@ -1559,20 +2075,37 @@ def create_rgb_page():
 
     def on_apply_rgb(btn):
         save_active_profile()
-        plan = device_core.build_lighting_plan(get_device_caps(), _current_lighting_state())
+        # The animation holds the device open; it has to let go before the CLI
+        # plan opens it, or the two write over each other.
+        had_animation = animator is not None and animator.animating
+        _stop_animation(restore=False)
+        plan = device_core.build_lighting_plan(caps, _current_lighting_state())
+        if had_animation:
+            plan.on_done = lambda ok, out: GLib.idle_add(_resume_animation)
         _queue_plan(plan)
+
+    def _resume_animation():
+        if _animation_ready():
+            _start_animation()
+        return False
 
     apply_btn.connect("clicked", on_apply_rgb)
     card.pack_start(apply_btn, False, False, 0)
 
-    # Select the first zone (or reactive) by default.
+    # Select the first zone (or the flash colour) by default.
     if lighting.zones:
         z0 = lighting.zones[0]
         select_target("zone", z0.key, zones.get(z0.key, "ff6600"), z0.label)
     elif lighting.has_reactive:
         _select_reactive()
 
+    _update_mode_dependent_ui()
+    building[0] = False
+    _sync_mode_widgets()
+
     return page
+
+
 def create_buttons_page():
     """Button Mapping page (3D wireframe of the mouse + assignment popover)."""
     import math as _math
@@ -1962,6 +2495,15 @@ def create_power_page():
         card.pack_start(charge_label, False, False, 0)
 
         def read_battery():
+            animator = app_state.get("_rgb_animator")
+            if animator is not None and animator.animating:
+                # A host-side effect holds the device open for as long as it
+                # animates, so a second rivalcfg process cannot open it -- and
+                # the collision surfaces as an ``open failed`` traceback in
+                # the status bar, which reads as the mouse being broken.  The
+                # reading is simply not available while the LEDs are being
+                # driven; the next tick gets it once the effect stops.
+                return
             plan = device_core.ApplyPlan("Battery level")
             plan.add(["--battery-level"])
             plan.on_done = lambda ok, out: GLib.idle_add(_show_battery, ok, out)
@@ -2229,8 +2771,6 @@ def apply_profile_to_ui(profile):
 
         if "rainbow" in profile:
             app_state["rainbow_enabled"] = bool(profile["rainbow"])
-            if "rainbow_check" in app_state:
-                app_state["rainbow_check"].set_active(bool(profile["rainbow"]))
         if profile.get("rainbow_value"):
             app_state["rainbow_value"] = profile["rainbow_value"]
             _combo_select(app_state.get("rainbow_combo"), profile["rainbow_value"])
@@ -2244,6 +2784,20 @@ def apply_profile_to_ui(profile):
             radios = app_state.get("effect_radios", {})
             if profile["light_effect"] in radios:
                 radios[profile["light_effect"]].set_active(True)
+
+        # The mode is the page's headline control, so a loaded profile has to
+        # move it, not just the hidden raw flags behind it.
+        if profile.get("fx_palette"):
+            app_state["fx_palette"] = list(profile["fx_palette"])
+        if profile.get("fx_speed") is not None:
+            app_state["fx_speed"] = float(profile["fx_speed"])
+        app_state["lighting_mode"] = profile.get("lighting_mode") or "steady"
+        set_mode = app_state.get("_rgb_set_mode")
+        if set_mode is not None:
+            set_mode(app_state["lighting_mode"], apply=False)
+        update_mode_ui = app_state.get("_rgb_update_mode_ui")
+        if update_mode_ui is not None:
+            update_mode_ui()
 
         mapping = profile.get("button_mapping")
         if isinstance(mapping, dict):
@@ -2668,14 +3222,24 @@ def create_settings_page():
             if btn_widget is not None:
                 btn_widget.set_hex(orange)
         app_state["zones"] = zones
+        # The RGB page's preview reads the live dict, but it still has to be
+        # told to repaint -- nothing else here crosses into that page.
+        _rgb_strip = app_state.get("_rgb_strip")
+        if _rgb_strip is not None:
+            _rgb_strip.queue_draw()
         app_state["reactive_hex"] = "off"
-        if "rainbow_check" in app_state:
-            app_state["rainbow_check"].set_active(False)
         app_state["rainbow_enabled"] = False
         app_state["selected_effect"] = caps_now.lighting.light_effect_default or "steady"
         if caps_now.lighting.has_default_lighting:
             app_state["default_lighting"] = caps_now.lighting.default_lighting_default or "rainbow"
             _combo_select(app_state.get("default_lighting_combo"), app_state["default_lighting"])
+        app_state["lighting_mode"] = "steady"
+        set_mode = app_state.get("_rgb_set_mode")
+        if set_mode is not None:
+            set_mode("steady", apply=False)
+        update_mode_ui = app_state.get("_rgb_update_mode_ui")
+        if update_mode_ui is not None:
+            update_mode_ui()
         effects = app_state.get("effect_radios", {})
         if app_state["selected_effect"] in effects:
             effects[app_state["selected_effect"]].set_active(True)
@@ -2734,6 +3298,10 @@ def update_accent_color(accent):
     }}
     .danger-btn:hover {{
         background: {accent};
+    }}
+    button:checked {{
+        background: rgba({rgb}, 0.22);
+        border: 1px solid {accent};
     }}
     """
     provider = Gtk.CssProvider()
@@ -2817,6 +3385,12 @@ def create_window():
     window.set_resizable(True)
 
     def on_destroy(*a):
+        # The animator is a worker thread holding the HID device open; it has
+        # to let go before the process tries to exit, or the mouse is left on
+        # whatever frame the loop was in the middle of.
+        animator = app_state.get("_rgb_animator")
+        if animator is not None:
+            animator.stop()
         queue = app_state.get("command_queue")
         if queue is not None:
             queue.stop()
