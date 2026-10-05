@@ -11,9 +11,10 @@ from (``tools/extract_aerox5_mesh.py`` reads ``build/aerox5_detailed.obj``):
 * the honeycomb is *cut into* a watertight shell, so the hole rims have to
   be recovered from sharp edges rather than from a ``honeycomb`` group;
 * the keycaps and side buttons are baked into the shell and carry no
-  separate ordered-outline groups, so the click-panel outlines are traced
-  from a rasterised mask of the cap's upward faces (the raw group boundary
-  is the honeycomb + feather staircase, not a part line);
+  separate ordered-outline groups, so a click-panel outline is its group's
+  own free-edge rim -- the part line, but rasterised onto the lattice, so it
+  is de-staircased before use (see CAP_RIM_*); the side-button caps are their
+  group's rim too, decimated to SIDE_CAP_PTS;
 * the whole model is mirrored (thumb side at +X), so X is negated once here
   to match the module convention (thumb side at -X).
 
@@ -50,7 +51,21 @@ CAP_MAX_PTS = 160        # decimation of a keycap outline
 SIDE_CAP_PTS = 64        # decimation of a side-button outline
 RIM_PTS = 24             # decimation of one honeycomb hole
 
-#: Click-keycap outline tracing (see cap_top_mask / cap_plan_curves).
+#: Superseded click-keycap outline tracing: each panel's own free-edge rim off
+#: the OBJ.  It is unused, because the rim is *per panel* and this model breaks
+#: its flank asymmetrically -- the right cap's rim runs out to 31.8 mm against
+#: the left's 27.6 mm -- so the pair comes out asymmetric (the right keycap
+#: 4.2 mm wider through the shoulder).  The rim is also a lattice staircase
+#: and had to be de-staircased.  Kept for reference.
+CAP_RIM_RESAMPLE = 200   # points, first arc-length resample of the raw rim
+CAP_RIM_WIN = 5          # points per side, circular mean (de-staircase)
+CAP_RIM_PTS = 128        # points, final keycap outline
+
+#: Click-keycap part line: the cap's *upward* faces masked in plan view, the
+#: row extremes swept, and both panels drawn from the LEFT one's curve,
+#: mirrored about the centreline (see the block in :func:`main`).  That is what
+#: makes the pair symmetric and what keeps the centre channel -- the centred
+#: wheel well -> spine -> CPI pocket -- shared and centred.
 CAP_RASTER = 0.08        # mm, raster cell of the cap-top mask
 CAP_MODE_WIN = 0.9       # mm, majority filter over the mask (feather comb)
 CAP_NZ = 0.25            # min |nz| for a face to count as "cap top"
@@ -293,6 +308,17 @@ def order_chain(nodes, adj):
         visited.add(cur)
         order.append(cur)
     return order
+
+
+def circ_mean(pts, win):
+    """Wrap-around moving mean over a closed loop, *win* points per side."""
+    pts = np.asarray(pts, dtype=np.float64)
+    if win <= 0 or len(pts) < 2 * win + 1:
+        return pts
+    out = np.zeros_like(pts)
+    for k in range(-win, win + 1):
+        out += np.roll(pts, k, axis=0)
+    return out / float(2 * win + 1)
 
 
 def loops_from_edges(edges, min_len=4):
