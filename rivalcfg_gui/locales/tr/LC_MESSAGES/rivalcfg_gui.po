@@ -11,663 +11,747 @@ msgstr ""
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 
-#: rivalcfg_gui.py:38
+#: rivalcfg_gui/app.py:38
 msgid "python-gobject is not installed. Install: pacman -S python-gobject"
 msgstr "python-gobject kurulu değil. Kurulum: pacman -S python-gobject"
 
-#: rivalcfg_gui.py:45 rivalcfg_gui.py:403
+#: rivalcfg_gui/app.py:45 rivalcfg_gui/app.py:403
 msgid "rivalcfg is not installed. Install: pip install rivalcfg"
 msgstr "rivalcfg kurulu değil. Kurulum: pip install rivalcfg"
 
-#: rivalcfg_gui.py:84
+#: rivalcfg_gui/app.py:84
 #, python-brace-format
 msgid "Failed to save settings: {}"
 msgstr "Ayarlar kaydedilemedi: {}"
 
-#: rivalcfg_gui.py:380
+#: rivalcfg_gui/app.py:380
 msgid "Processing..."
 msgstr "İşleniyor..."
 
-#: rivalcfg_gui.py:393
+#: rivalcfg_gui/app.py:393
 msgid "Unknown error"
 msgstr "Bilinmeyen hata"
 
-#: rivalcfg_gui.py:394 rivalcfg_gui.py:404 rivalcfg_gui.py:409
-#: rivalcfg_gui.py:414
+#: rivalcfg_gui/app.py:394 rivalcfg_gui/app.py:404 rivalcfg_gui/app.py:409
+#: rivalcfg_gui/app.py:414
 msgid "Error"
 msgstr "Hata"
 
-#: rivalcfg_gui.py:399
+#: rivalcfg_gui/app.py:399
 msgid "Done"
 msgstr "Tamamlandı"
 
-#: rivalcfg_gui.py:408
+#: rivalcfg_gui/app.py:408
 msgid "Timeout (10s)"
 msgstr "Zaman aşımı (10s)"
 
-#: rivalcfg_gui.py:413
+#: rivalcfg_gui/app.py:413
 msgid "Unexpected error"
 msgstr "Beklenmeyen hata"
 
-#: rivalcfg_gui.py:437
+#: rivalcfg_gui/app.py:437 rivalcfg_gui/app.py
 #, c-format
-#: rivalcfg_gui.py
 msgid "Default (%s)"
 msgstr "Varsayılan (%s)"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Ctrl"
 msgstr "Ctrl"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Shift"
 msgstr "Shift"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Alt"
 msgstr "Alt"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Super"
 msgstr "Super"
 
+#: rivalcfg_gui/app.py
 #, c-format
-#: rivalcfg_gui.py
 msgid "At most %d keys at once"
 msgstr "Aynı anda en fazla %d tuş"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Press a key…"
 msgstr "Bir tuşa basın…"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Listening… (Esc cancels)"
 msgstr "Dinleniyor… (Esc iptal eder)"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Letters"
 msgstr "Harfler"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Numbers"
 msgstr "Sayılar"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Editing"
 msgstr "Düzenleme"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Punctuation"
 msgstr "Noktalama"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Function keys"
 msgstr "Fonksiyon tuşları"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Navigation"
 msgstr "Gezinme"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Modifiers"
 msgstr "Değiştiriciler"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Other"
 msgstr "Diğer"
 
-#~ msgid "DPI Settings"
-#~ msgstr "DPI Ayarları"
-
-#: rivalcfg_gui.py:455
+#: rivalcfg_gui/app.py:455
 msgid "Preset"
 msgstr "Hazır Ayar"
 
-#: rivalcfg_gui.py:493 rivalcfg_gui.py:575 rivalcfg_gui.py:718
-#: rivalcfg_gui.py:1032
+#: rivalcfg_gui/app.py:493 rivalcfg_gui/app.py:575 rivalcfg_gui/app.py:718
+#: rivalcfg_gui/app.py:1032
 msgid "APPLY"
 msgstr "UYGULA"
 
-#: rivalcfg_gui.py:505 rivalcfg_gui.py:1050
+#: rivalcfg_gui/app.py:505 rivalcfg_gui/app.py:1050
 msgid "RESET"
 msgstr "SIFIRLA"
 
-#: rivalcfg_gui.py:529
-#~ msgid "Polling Rate"
-#~ msgstr "Yenileme Hızı"
-
-#: rivalcfg_gui.py:547 rivalcfg_gui.py:551
+#: rivalcfg_gui/app.py:547 rivalcfg_gui/app.py:551
 #, python-brace-format
 msgid "{} Hz"
 msgstr "{} Hz"
 
-#: rivalcfg_gui.py:560 rivalcfg_gui.py:569
+#: rivalcfg_gui/app.py:560 rivalcfg_gui/app.py:569
 #, python-brace-format
 msgid "{} Hz → {} ms"
 msgstr "{} Hz → {} ms"
 
-#: rivalcfg_gui.py:597
+#: rivalcfg_gui/app.py:597
 msgid "RGB Lighting"
 msgstr "RGB Aydınlatma"
 
-#: rivalcfg_gui.py:606
+#: rivalcfg_gui/app.py:606
 msgid "COLORS"
 msgstr "RENKLER"
 
-#: rivalcfg_gui.py:670
+#: rivalcfg_gui/app.py:670
 msgid "Z1 - Top Strip"
 msgstr "Z1 - Üst Şerit"
 
-#: rivalcfg_gui.py:671
+#: rivalcfg_gui/app.py:671
 msgid "Z2 - Middle Strip"
 msgstr "Z2 - Orta Şerit"
 
-#: rivalcfg_gui.py:672
+#: rivalcfg_gui/app.py:672
 msgid "Z3 - Bottom Strip"
 msgstr "Z3 - Alt Şerit"
 
-#: rivalcfg_gui.py:673
+#: rivalcfg_gui/app.py:673
 msgid "Z4 - Logo"
 msgstr "Z4 - Logo"
 
-#: rivalcfg_gui.py:675
+#: rivalcfg_gui/app.py:675
 msgid "EFFECT"
 msgstr "EFEKT"
 
-#: rivalcfg_gui.py:682
+#: rivalcfg_gui/app.py:682
 msgid "Steady"
 msgstr "Sabit"
 
-#: rivalcfg_gui.py:683
+#: rivalcfg_gui/app.py:683
 msgid "Breath"
 msgstr "Nefes"
 
-#: rivalcfg_gui.py:684
+#: rivalcfg_gui/app.py:684
 msgid "Breath (Slow)"
 msgstr "Nefes (Yavaş)"
 
-#: rivalcfg_gui.py:685
+#: rivalcfg_gui/app.py:685
 msgid "Breath (Fast)"
 msgstr "Nefes (Hızlı)"
 
-#: rivalcfg_gui.py:686
+#: rivalcfg_gui/app.py:686
 msgid "Rainbow Shift"
 msgstr "Gökkuşağı Geçişi"
 
-#: rivalcfg_gui.py:687
+#: rivalcfg_gui/app.py:687
 msgid "Rainbow Breath"
 msgstr "Gökkuşağı Nefes"
 
-#: rivalcfg_gui.py:688
+#: rivalcfg_gui/app.py:688
 msgid "Disco"
 msgstr "Disko"
 
-#: rivalcfg_gui.py:767
+#: rivalcfg_gui/app.py:767
 msgid "Button Mapping"
 msgstr "Düğme Eşleme"
 
-#: rivalcfg_gui.py:773
+#: rivalcfg_gui/app.py:773
 msgid "Button 1"
 msgstr "Düğme 1"
 
-#: rivalcfg_gui.py:774
+#: rivalcfg_gui/app.py:774
 msgid "Button 2"
 msgstr "Düğme 2"
 
-#: rivalcfg_gui.py:775
+#: rivalcfg_gui/app.py:775
 msgid "Button 3"
 msgstr "Düğme 3"
 
-#: rivalcfg_gui.py:776
+#: rivalcfg_gui/app.py:776
 msgid "Button 4"
 msgstr "Düğme 4"
 
-#: rivalcfg_gui.py:777
+#: rivalcfg_gui/app.py:777
 msgid "Button 5"
 msgstr "Düğme 5"
 
-#: rivalcfg_gui.py:778
+#: rivalcfg_gui/app.py:778
 msgid "Button 6"
 msgstr "Düğme 6"
 
-#: rivalcfg_gui.py:779
+#: rivalcfg_gui/app.py:779
 msgid "DPI Cycle"
 msgstr "DPI Döngüsü"
 
-#: rivalcfg_gui.py:780 rivalcfg_gui.py:857
+#: rivalcfg_gui/app.py:780 rivalcfg_gui/app.py:857
 msgid "Scroll Up"
 msgstr "Yukarı Kaydır"
 
-#: rivalcfg_gui.py:781 rivalcfg_gui.py:858
+#: rivalcfg_gui/app.py:781 rivalcfg_gui/app.py:858
 msgid "Scroll Down"
 msgstr "Aşağı Kaydır"
 
-#: rivalcfg_gui.py:782
+#: rivalcfg_gui/app.py:782
 msgid "Disable"
 msgstr "Devre Dışı"
 
-#: rivalcfg_gui.py:815
+#: rivalcfg_gui/app.py:815
 msgid "rival3.png not found."
 msgstr "rival3.png bulunamadı."
 
-#: rivalcfg_gui.py:851
+#: rivalcfg_gui/app.py:851
 msgid "Left Click"
 msgstr "Sol Tıklama"
 
-#: rivalcfg_gui.py:852
+#: rivalcfg_gui/app.py:852
 msgid "Right Click"
 msgstr "Sağ Tıklama"
 
-#: rivalcfg_gui.py:853
+#: rivalcfg_gui/app.py:853
 msgid "Middle"
 msgstr "Orta"
 
-#: rivalcfg_gui.py:854
+#: rivalcfg_gui/app.py:854
 msgid "Back"
 msgstr "Geri"
 
-#: rivalcfg_gui.py:855
+#: rivalcfg_gui/app.py:855
 msgid "Forward"
 msgstr "İleri"
 
-#: rivalcfg_gui.py:856 rivalcfg_gui.py:1546 rivalcfg_gui.py:1895
-#~ msgid "DPI"
-#~ msgstr "DPI"
-
-#: rivalcfg_gui.py:1082
+#: rivalcfg_gui/app.py:1082
 msgid "Connected Devices"
 msgstr "Bağlı Cihazlar"
 
-#: rivalcfg_gui.py:1098
+#: rivalcfg_gui/app.py:1098
 msgid "Click refresh to scan..."
 msgstr "Taramak için yenile butonuna tıklayın..."
 
-#: rivalcfg_gui.py:1106
+#: rivalcfg_gui/app.py:1106
 msgid "REFRESH"
 msgstr "YENİLE"
 
-#: rivalcfg_gui.py:1130
+#: rivalcfg_gui/app.py:1130
 msgid "About"
 msgstr "Hakkında"
 
-#: rivalcfg_gui.py:1140
+#: rivalcfg_gui/app.py:1140
 msgid "Linux GUI configuration tool for SteelSeries mice."
 msgstr "SteelSeries fareleri için Linux GUI yapılandırma aracı."
 
-#: rivalcfg_gui.py:1141
+#: rivalcfg_gui/app.py:1141
 msgid "Built on top of the rivalcfg library."
 msgstr "rivalcfg kütüphanesi üzerine inşa edilmiştir."
 
-#: rivalcfg_gui.py:1142
+#: rivalcfg_gui/app.py:1142
 msgid "Requirements:"
 msgstr "Gereksinimler:"
 
-#: rivalcfg_gui.py:1143
+#: rivalcfg_gui/app.py:1143
 msgid "  pip install rivalcfg"
 msgstr "  pip install rivalcfg"
 
-#: rivalcfg_gui.py:1144
+#: rivalcfg_gui/app.py:1144
 msgid "  pacman -S python-gobject python-cairo"
 msgstr "  pacman -S python-gobject python-cairo"
 
-#: rivalcfg_gui.py:1155
+#: rivalcfg_gui/app.py:1155
 msgid "GitHub: "
 msgstr "GitHub: "
 
-#: rivalcfg_gui.py:1161
+#: rivalcfg_gui/app.py:1161
 msgid "github.com/MrGodzilla38/rivalcfg-gui"
 msgstr "github.com/MrGodzilla38/rivalcfg-gui"
 
-#: rivalcfg_gui.py:1214
+#: rivalcfg_gui/app.py:1214
 msgid "Settings"
 msgstr "Ayarlar"
 
-#: rivalcfg_gui.py:1224
+#: rivalcfg_gui/app.py:1224
 msgid "BEHAVIOR"
 msgstr "DAVRANIŞ"
 
-#: rivalcfg_gui.py:1235
+#: rivalcfg_gui/app.py:1235
 msgid "Startup Minimize"
 msgstr "Başlangıçta Küçült"
 
-#: rivalcfg_gui.py:1238
+#: rivalcfg_gui/app.py:1238
 msgid "Launch minimized to system tray"
 msgstr "Sistem tepsisine küçültülmüş olarak başlat"
 
-#: rivalcfg_gui.py:1258
+#: rivalcfg_gui/app.py:1258
 msgid "Auto-Apply on Change"
 msgstr "Değişiklikte Otomatik Uygula"
 
-#: rivalcfg_gui.py:1261
+#: rivalcfg_gui/app.py:1261
 msgid "Apply settings immediately when changed"
 msgstr "Ayarları değiştirildiğinde hemen uygula"
 
-#: rivalcfg_gui.py:1280
+#: rivalcfg_gui/app.py:1280
 msgid "LANGUAGE"
 msgstr "DİL"
 
-#: rivalcfg_gui.py:1290
+#: rivalcfg_gui/app.py:1290
 msgid "Language"
 msgstr "Dil"
 
-#: rivalcfg_gui.py:1293
+#: rivalcfg_gui/app.py:1293
 msgid "Select application display language"
 msgstr "Uygulama görüntüleme dilini seçin"
 
-#: rivalcfg_gui.py:1327
+#: rivalcfg_gui/app.py:1327
 msgid "APPEARANCE"
 msgstr "GÖRÜNÜM"
 
-#: rivalcfg_gui.py:1338
+#: rivalcfg_gui/app.py:1338
 msgid "Accent Color"
 msgstr "Vurgu Rengi"
 
-#: rivalcfg_gui.py:1341
+#: rivalcfg_gui/app.py:1341
 msgid "UI highlight and button color"
 msgstr "Arayüz vurgu ve düğme rengi"
 
-#: rivalcfg_gui.py:1388
+#: rivalcfg_gui/app.py:1388
 msgid "Reset to Default"
 msgstr "Varsayılana Sıfırla"
 
-#: rivalcfg_gui.py:1412
+#: rivalcfg_gui/app.py:1412
 msgid "Mouse Settings"
 msgstr "Fare Ayarları"
 
-#: rivalcfg_gui.py:1420
+#: rivalcfg_gui/app.py:1420
 msgid "CHECK MOUSE"
 msgstr "FAREYİ KONTROL ET"
 
-#: rivalcfg_gui.py:1426 rivalcfg_gui.py:1954
+#: rivalcfg_gui/app.py:1426 rivalcfg_gui/app.py:1954
 msgid "Mouse connected"
 msgstr "Fare bağlı"
 
-#: rivalcfg_gui.py:1428 rivalcfg_gui.py:1956
+#: rivalcfg_gui/app.py:1428 rivalcfg_gui/app.py:1956
 msgid "Mouse not found"
 msgstr "Fare bulunamadı"
 
-#: rivalcfg_gui.py:1431
+#: rivalcfg_gui/app.py:1431
 msgid "No device found."
 msgstr "Cihaz bulunamadı."
 
-#: rivalcfg_gui.py:1439
+#: rivalcfg_gui/app.py:1439
 msgid "FIRMWARE VERSION"
 msgstr "FIRMWARE SÜRÜMÜ"
 
-#: rivalcfg_gui.py:1445
+#: rivalcfg_gui/app.py:1445
 #, python-format
 msgid "Firmware: %s"
 msgstr "Firmware: %s"
 
-#: rivalcfg_gui.py:1447 rivalcfg_gui.py:1470
+#: rivalcfg_gui/app.py:1447 rivalcfg_gui/app.py:1470
 msgid "Mouse not connected"
 msgstr "Fare bağlı değil"
 
-#: rivalcfg_gui.py:1453
+#: rivalcfg_gui/app.py:1453
 msgid "FACTORY RESET"
 msgstr "FABRİKA AYARLARINA DÖNDÜR"
 
-#: rivalcfg_gui.py:1462
+#: rivalcfg_gui/app.py:1462
 msgid "All settings will be restored to factory defaults. Are you sure?"
 msgstr "Tüm ayarlar fabrika varsayılanlarına döndürülecek. Emin misiniz?"
 
-#: rivalcfg_gui.py:1464
+#: rivalcfg_gui/app.py:1464
 msgid "Factory Reset"
 msgstr "Fabrika Ayarlarına Döndür"
 
-#: rivalcfg_gui.py:1547 rivalcfg_gui.py:1896
-#~ msgid "POLLING"
-#~ msgstr "YENİLENME"
-
-#: rivalcfg_gui.py:1548 rivalcfg_gui.py:1897
+#: rivalcfg_gui/app.py:1548 rivalcfg_gui/app.py:1897
 msgid "RGB"
 msgstr "RGB"
 
-#: rivalcfg_gui.py:1549 rivalcfg_gui.py:1898
+#: rivalcfg_gui/app.py:1549 rivalcfg_gui/app.py:1898
 msgid "BUTTONS"
 msgstr "DÜĞMELER"
 
-#: rivalcfg_gui.py:1550 rivalcfg_gui.py:1899
+#: rivalcfg_gui/app.py:1550 rivalcfg_gui/app.py:1899
 msgid "DEVICES"
 msgstr "CİHAZLAR"
 
-#: rivalcfg_gui.py:1551 rivalcfg_gui.py:1900
+#: rivalcfg_gui/app.py:1551 rivalcfg_gui/app.py:1900
 msgid "SETTINGS"
 msgstr "AYARLAR"
 
-#: rivalcfg_gui.py:1552 rivalcfg_gui.py:1901
+#: rivalcfg_gui/app.py:1552 rivalcfg_gui/app.py:1901
 msgid "ABOUT"
 msgstr "HAKKINDA"
 
-#: rivalcfg_gui.py:1689
+#: rivalcfg_gui/app.py:1689
 msgid "Cannot delete the last profile."
 msgstr "Son profil silinemez."
 
-#: rivalcfg_gui.py:1699
+#: rivalcfg_gui/app.py:1699
 #, python-format
 msgid "Delete profile \"%s\"?"
 msgstr "\"%s\" profili silinsin mi?"
 
-#: rivalcfg_gui.py:1701
+#: rivalcfg_gui/app.py:1701
 msgid "Delete Profile"
 msgstr "Profili Sil"
 
-#: rivalcfg_gui.py:1719
+#: rivalcfg_gui/app.py:1719
 msgid "Rename Profile"
 msgstr "Profili Yeniden Adlandır"
 
-#: rivalcfg_gui.py:1724 rivalcfg_gui.py:1809
+#: rivalcfg_gui/app.py:1724 rivalcfg_gui/app.py:1809
 msgid "Cancel"
 msgstr "İptal"
 
-#: rivalcfg_gui.py:1725 rivalcfg_gui.py:1810
+#: rivalcfg_gui/app.py:1725 rivalcfg_gui/app.py:1810
 msgid "OK"
 msgstr "Tamam"
 
-#: rivalcfg_gui.py:1733 rivalcfg_gui.py:1818
+#: rivalcfg_gui/app.py:1733 rivalcfg_gui/app.py:1818
 msgid "Profile name:"
 msgstr "Profil adı:"
 
-#: rivalcfg_gui.py:1751
+#: rivalcfg_gui/app.py:1751
 #, python-format
 msgid "Could not rename to \"%s\". Name may already exist."
 msgstr "\"%s\" olarak yeniden adlandırılamadı. Bu isimde bir profil zaten olabilir."
 
-#: rivalcfg_gui.py:1804
+#: rivalcfg_gui/app.py:1804
 msgid "New Profile"
 msgstr "Yeni Profil"
 
-#: rivalcfg_gui.py:1839
+#: rivalcfg_gui/app.py:1839
 msgid "PROFILES"
 msgstr "PROFİLLER"
 
-#: rivalcfg_gui.py:1936
+#: rivalcfg_gui/app.py:1936
 msgid "Starting..."
 msgstr "Başlatılıyor..."
 
-#: rivalcfg_gui.py:1942
+#: rivalcfg_gui/app.py:1942
 msgid "Don't save (--no-save)"
 msgstr "Kaydetme (--no-save)"
 
-#: rivalcfg_gui.py:684
+#: rivalcfg_gui/app.py:684
 msgid "Setting up helper (enter password)..."
 msgstr "Yardımcı ayarlanıyor (şifre girin)..."
 
-#: rivalcfg_gui.py:710
+#: rivalcfg_gui/app.py:710
 msgid "Helper setup failed"
 msgstr "Yardımcı ayarlanamadı"
 
-#: rivalcfg_gui.py:752
+#: rivalcfg_gui/app.py:752
 msgid "Helper error"
 msgstr "Yardımcı hatası"
 
-#: rivalcfg_gui.py:797
+#: rivalcfg_gui/app.py:797
 msgid "No mouse device"
 msgstr "Fare cihazı yok"
 
-#: rivalcfg_gui.py:810
+#: rivalcfg_gui/app.py:810
 msgid "Mouse device error"
 msgstr "Fare cihazı hatası"
 
-#: rivalcfg_gui.py:913
+#: rivalcfg_gui/app.py:913
 msgid "No keyboard device"
 msgstr "Klavye cihazı yok"
 
-#: rivalcfg_gui.py:959
+#: rivalcfg_gui/app.py:959
 msgid "Macro running"
 msgstr "Makro çalışıyor"
 
-#: rivalcfg_gui.py:963 rivalcfg_gui.py:1857
+#: rivalcfg_gui/app.py:963 rivalcfg_gui/app.py:1857
 msgid "Macro stopped"
 msgstr "Makro durduruldu"
 
-#: rivalcfg_gui.py:1714
+#: rivalcfg_gui/app.py:1714
 msgid "MACRO / AUTO CLICKER"
 msgstr "MAKRO / OTOMATİK TIKLAMA"
 
-#: rivalcfg_gui.py:1724
+#: rivalcfg_gui/app.py:1724
 msgid "Macro / Auto Clicker"
 msgstr "Makro / Otomatik Tıklama"
 
-#: rivalcfg_gui.py:1727
+#: rivalcfg_gui/app.py:1727
 msgid "Enable auto-click macro"
 msgstr "Otomatik tıklama makrosunu etkinleştir"
 
-#: rivalcfg_gui.py:1761
+#: rivalcfg_gui/app.py:1761
 msgid "Not set"
 msgstr "Ayarlanmamış"
 
-#: rivalcfg_gui.py:1762 rivalcfg_gui.py:2406 rivalcfg_gui.py:2410
+#: rivalcfg_gui/app.py:1762 rivalcfg_gui/app.py:2406 rivalcfg_gui/app.py:2410
 msgid "Shortcut: "
 msgstr "Kısayol: "
 
-#: rivalcfg_gui.py:1767 rivalcfg_gui.py:1816
+#: rivalcfg_gui/app.py:1767 rivalcfg_gui/app.py:1816
 msgid "Set Key..."
 msgstr "Tuş Ayarla..."
 
-#: rivalcfg_gui.py:1780
-msgid "evdev module not installed.\nInstall: python-evdev"
-msgstr "evdev modülü kurulu değil.\nKurulum: python-evdev"
+#: rivalcfg_gui/app.py:1780
+msgid ""
+"evdev module not installed.\n"
+"Install: python-evdev"
+msgstr ""
+"evdev modülü kurulu değil.\n"
+"Kurulum: python-evdev"
 
-#: rivalcfg_gui.py:1788
+#: rivalcfg_gui/app.py:1788
 msgid "Clicks per second:"
 msgstr "Saniyedeki tıklama:"
 
-#: rivalcfg_gui.py:1809
+#: rivalcfg_gui/app.py:1809
 msgid "Trigger key:"
 msgstr "Tetik tuşu:"
 
-#: rivalcfg_gui.py:1825
+#: rivalcfg_gui/app.py:1825
 msgid "Mode:"
 msgstr "Mod:"
 
-#: rivalcfg_gui.py:1829
+#: rivalcfg_gui/app.py:1829
 msgid "Toggle (press once to start/stop)"
 msgstr "Geçmeli (başlatmak/durdurmak için bir kez bas)"
 
-#: rivalcfg_gui.py:1830
+#: rivalcfg_gui/app.py:1830
 msgid "Hold (click while held)"
 msgstr "Basılı tut (basılıyken tıkla)"
 
-#: rivalcfg_gui.py:1839
+#: rivalcfg_gui/app.py:1839
 msgid "Mouse button:"
 msgstr "Fare düğmesi:"
 
-#: rivalcfg_gui.py:1845
+#: rivalcfg_gui/app.py:1845
 msgid "Middle Click"
 msgstr "Orta Tıklama"
 
-#: rivalcfg_gui.py:1882
+#: rivalcfg_gui/app.py:1882
 msgid "pynput not installed"
 msgstr "pynput kurulu değil"
 
-#: rivalcfg_gui.py:1938
+#: rivalcfg_gui/app.py:1938
 msgid "Set Trigger Key"
 msgstr "Tetik Tuşunu Ayarla"
 
-#: rivalcfg_gui.py:1948
-msgid "Press any key or click a mouse button...\nESC to cancel"
-msgstr "Bir tuşa basın veya fare düğmesine tıklayın...\nİptal için ESC"
+#: rivalcfg_gui/app.py:1948
+msgid ""
+"Press any key or click a mouse button...\n"
+"ESC to cancel"
+msgstr ""
+"Bir tuşa basın veya fare düğmesine tıklayın...\n"
+"İptal için ESC"
 
-#: rivalcfg_gui.py:2052
+#: rivalcfg_gui/app.py:2052
 msgid "Chord"
 msgstr "Kombinasyon"
 
-#: rivalcfg_gui.py:2071
+#: rivalcfg_gui/app.py:2071
 msgid "Set Macro Toggle Key"
 msgstr "Makro Geçiş Tuşunu Ayarla"
 
-#: rivalcfg_gui.py:2082
+#: rivalcfg_gui/app.py:2082
 msgid "Press key combination... (ENTER to confirm, ESC to cancel)"
 msgstr "Tuş kombinasyonuna basın... (Onaylamak için ENTER, iptal için ESC)"
 
-#: rivalcfg_gui.py:2087 rivalcfg_gui.py:2119
+#: rivalcfg_gui/app.py:2087 rivalcfg_gui/app.py:2119
 msgid "(press keys)"
 msgstr "(tuşlara basın)"
 
-#: rivalcfg_gui.py:2412
+#: rivalcfg_gui/app.py:2412
 msgid "Shortcut: Not set"
 msgstr "Kısayol: Ayarlanmamış"
 
-#: rivalcfg_gui.py:3448
+#: rivalcfg_gui/app.py:3448
 msgid "Bug Report"
 msgstr "Hata Bildir"
 
-#~ msgid "BUTTON ASSIGNMENTS"
-#~ msgstr "DÜĞME ATAMALARI"
-
-#~ msgid "Left Click (B1)"
-#~ msgstr "Sol Tıklama (B1)"
-
-#~ msgid "Right Click (B2)"
-#~ msgstr "Sağ Tıklama (B2)"
-
-#~ msgid "Middle Click (B3)"
-#~ msgstr "Orta Tıklama (B3)"
-
-#~ msgid "Back (B4)"
-#~ msgstr "Geri (B4)"
-
-#~ msgid "Forward (B5)"
-#~ msgstr "İleri (B5)"
-
-#~ msgid "DPI (B6)"
-#~ msgstr "DPI (B6)"
-
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Sensitivity"
 msgstr "Hassasiyet"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "SENSITIVITY"
 msgstr "HASSASİYET"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "DPI PRESETS"
 msgstr "DPI ÖN AYARLARI"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "POLLING RATE"
 msgstr "YOKLAMA HIZI"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 #, python-brace-format
 msgid "App preset: {n} — {value} DPI"
 msgstr "Uygulama ön ayarı: {n} — {value} DPI"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "Select this preset as the active DPI (sent to the mouse on Apply)"
 msgstr "Bu ön ayarı etkin DPI olarak kullan (Uygula'da fareye gönderilir)"
 
-#: rivalcfg_gui.py
+#: rivalcfg_gui/app.py
 msgid "What the app will set. The mouse's own DPI button isn't reported back, so this can be out of date."
 msgstr "Uygulamanın ayarlayacağı değer. Farenin kendi DPI düğmesi geri bildirilmez, bu yüzden bu değer eski olabilir."
 
-#~ #: rivalcfg_gui.py
-#~ #, python-brace-format
-#~ msgid "Active: DPI {n} — {value}"
-#~ msgstr "Etkin: DPI {n} — {value}"
+#: rivalcfg_gui/app.py
+#, python-format
+msgid "Effect stopped: %s"
+msgstr ""
 
-#~ #: rivalcfg_gui.py
-#~ msgid "Use this preset as the active DPI"
-#~ msgstr "Bu ön ayarı etkin DPI olarak kullan"
+#: rivalcfg_gui/app.py
+msgid "Pick a colour to edit"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "MOUSE PREVIEW (front → back)"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Rainbow"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "ColorShift"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Color Breathe"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Off"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "One solid colour per zone."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Animated sweep the mouse runs by itself."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "A palette travelling along the mouse. Runs on this computer, not the mouse."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "The palette fading in and out together. Runs on this computer, not the mouse."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "LEDs off."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "LIGHTING MODE"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Rainbow zones"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "PALETTE"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+#, python-format
+msgid "Palette colour %d"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Speed"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Seconds for one full cycle."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Runs only while this page is open, and uses the battery faster than a stored colour. The mouse keeps the last colour when it stops."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "ZONE COLORS"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Colors look washed out or pink? Set the Dim timer to 0 on the Power page before comparing."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "CLICK FLASH"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Flash colour"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Click flash color"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "The mouse flashes this colour when a button is pressed. It is independent of the lighting mode above."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Advanced"
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Wake lighting: what the mouse shows for a moment just after it wakes from sleep. Normally set by the lighting mode; change it here only if you want the two to differ."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "Rainbow replaces these colours."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "The LEDs are off."
+msgstr ""
+
+#: rivalcfg_gui/app.py
+msgid "The palette replaces these colours."
+msgstr ""
