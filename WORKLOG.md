@@ -18,21 +18,39 @@ Test OS: CachyOS + Hyprland/Wayland.
 | 3 | Buttons page redesign | **Done** (Cairo → 3D wireframe after feedback) |
 | 4 | Devices + Power pages | **Done** |
 | 5 | Behavior: consent, profiles, macro/setuid removal | **Partially done** (see below) |
-| 6 | Packaging, tests, CI, i18n | **Not started** |
+| 6 | Packaging, tests, CI, i18n | **Done** (see below) |
 
-Tests: **66 passing** (`python -m pytest tests/`), no hardware required.
+Tests: **331 passing** (`python -m pytest tests/`), no hardware required.
 
 ---
 
 ## New / removed files
 
+In Phase 6 the seven top-level modules moved into the `rivalcfg_gui/` package,
+taking `assets/` and `locales/` inside it with them. Paths below are the current
+ones.
+
 Added:
-- `device_core.py` — device identity, capabilities, `CommandQueue`, `ApplyPlan`,
-  plan builders, profile migration.
-- `mouse3d.py` — 3D wireframe model of the Aerox 5 (shell + surface buttons + projection).
-- `widgets.py` — GTK widgets: `ColorSwatch`, `ColorEditor` (HSV gradient + hue + hex + palette).
-- `colorutil.py` — pure colour helpers (hex ↔ RGB ↔ HSV), GTK-free so they test headlessly.
-- `tests/` — `test_device_core.py`, `test_mouse3d.py`, `test_widgets.py`.
+- `rivalcfg_gui/` — the package: `__init__.py` (version + lazy `main()`),
+  `__main__.py` (`python -m rivalcfg_gui`), `app.py` (was `rivalcfg_gui.py`),
+  `device_core.py`, `lighting_fx.py`, `mouse3d.py`, `aerox5_mesh.py`,
+  `widgets.py`, `colorutil.py`, plus `assets/` and `locales/`.
+- `rivalcfg_gui/device_core.py` — device identity, capabilities, `CommandQueue`,
+  `ApplyPlan`, plan builders, profile migration.
+- `rivalcfg_gui/mouse3d.py` — 3D wireframe model of the Aerox 5 (shell + surface
+  buttons + projection).
+- `rivalcfg_gui/widgets.py` — GTK widgets: `ColorSwatch`, `ColorEditor` (HSV
+  gradient + hue + hex + palette).
+- `rivalcfg_gui/colorutil.py` — pure colour helpers (hex ↔ RGB ↔ HSV), GTK-free
+  so they test headlessly.
+- `pyproject.toml` — build-system, pytest `pythonpath`, ruff config.
+- `tools/check_locales.py`, `tools/check_versions.py` — the locale and version
+  gates; `tools/find_unreachable_msgids.py` — a read-only diagnostic for dead
+  catalog entries; `RELEASING.md`; `.github/workflows/ci.yml`,
+  `.github/dependabot.yml`.
+- `tests/` — `test_device_core.py`, `test_lighting_fx.py`, `test_mouse3d.py`,
+  `test_widgets.py`, `test_locales.py`, `test_versions.py`,
+  `test_unreachable_msgids.py`.
 
 Removed:
 - `evdev_helper.c` (setuid input helper).
@@ -40,6 +58,7 @@ Removed:
 - `MacroEngine`, `_WL_KEYCODE_TABLE`, X11/Wayland keycode resolution,
   `_find_keyboard_device`/`_find_mouse_device`, `pynput`/`evdev`/`Xlib` imports.
 - `Gtk.ColorButton` usage (replaced by the custom picker).
+- 29 dead locale msgids left over from the auto-clicker/helper (Phase 6).
 
 ---
 
@@ -365,24 +384,120 @@ Not done (tracked for later):
 
 ---
 
-## Phase 6 — Packaging / tests / CI / i18n (not started)
+## Phase 6 — Packaging / tests / CI / i18n (done)
 
-Partially touched:
-- `setup.py`: console entry point `rivalcfg-gui = rivalcfg_gui:main`, `package_data`
-  for assets + locales, `install_requires` trimmed to `rivalcfg`, new modules listed.
-- `requirements.txt` trimmed to `rivalcfg`.
-- AUR PKGBUILD / .SRCINFO: dropped `gcc`/evdev/pynput/xlib, bumped to 1.6.0.
-- Debian `control` + `rules`: dropped helper build and input deps; installs the new
-  modules.
-- Flatpak yml + `python3-requirements.json`: dropped the evdev_helper module and
-  evdev/pynput/xlib/six.
+The app is now a real package and is shippable. Before this phase `pip install .`
+produced a **broken** app, not a merely incomplete one: `setup.py` listed
+`py_modules` and omitted `lighting_fx.py`, which `app.py` imports, and
+`package_data` used a `""` key on a project with no `MANIFEST.in`, so `assets/`
+and `locales/` never shipped at all. The Debian and Flatpak recipes were broken
+the same way — each hand-copied five modules and omitted both `lighting_fx.py`
+and `aerox5_mesh.py`.
 
-Still open:
-- GitHub Actions CI (lint, pytest, `msgfmt -c`, distro build checks, latest-rivalcfg job).
-- Renovate/Dependabot on the rivalcfg pin.
-- Locale refresh/regeneration and a msgid-parity check.
-- Migrating the single-file app into a package layout (deferred; modules already
-  break the single-file assumption).
+**Package migration.** The seven modules moved into `rivalcfg_gui/`, with
+`assets/` and `locales/` inside it, plus `__init__.py` and `__main__.py`:
+
+```
+rivalcfg_gui/{__init__,__main__,app,device_core,lighting_fx,mouse3d,
+              aerox5_mesh,widgets,colorutil}.py  + assets/ + locales/
+```
+
+Path resolution needed no change: every asset/locale path was already
+`os.path.dirname(os.path.realpath(__file__))`-relative, so moving the module
+moved its data with it. `__init__.py` is deliberately import-light — it holds
+`__version__` and a *lazy* `main()` that imports `.app` on call. If it imported
+the app eagerly, `from rivalcfg_gui import device_core` in the tests would drag
+in GTK and fail headlessly; the suite staying GTK-free is what makes the CI
+matrix cheap. The distro recipes collapsed accordingly: instead of hand-listing
+modules, each installs the `rivalcfg_gui/` directory once and launches
+`python3 -m rivalcfg_gui` through a small wrapper. That collapse is what fixes
+the missing `lighting_fx`/`aerox5_mesh` rather than patching the lists.
+
+**Setup / version.** `setup.py` is now `packages=["rivalcfg_gui"]` with
+`package_data` for the assets and `.mo` files; `rivalcfg_gui/__init__.py`'s
+`__version__` is the single source of truth and `setup.py` reads it by regex
+(not by import — importing is exactly what would pull in `gi`). A minimal
+`pyproject.toml` adds the build-system, the pytest `pythonpath`, and the ruff
+config. `PyGObject`/`pycairo` are still deliberately absent from
+`install_requires`; see the README.
+
+**Distro files.** `dist/debian/rules` and the Flatpak manifest each copy the
+package directory instead of listing modules, and install the downloaded
+`rivalcfg` binary inside it; the Debian symlink became a `/usr/bin/rivalcfg-gui`
+wrapper. `dist/debian/changelog` gained a top entry at the current version — it
+had sat at `1.4.0-1` while the package was at `1.6.0`, which is exactly the
+drift the new version check exists to catch. The stale `evdev_helper` entry was
+dropped from `.gitignore`.
+
+**Locale tooling.** `tools/check_locales.py` (stdlib only) asserts three things:
+every catalog's active msgid set equals `en.po`'s; each `.mo`'s key set matches
+its own `.po`'s translated set (this is what catches a stale `.mo`); and
+`msgfmt --check-format` passes. It also flags a translation that drops or
+reorders a `{}`/`%s` placeholder — driven by the *msgid*, so a translation that
+dropped its only placeholder is still caught. It is wrapped by
+`tests/test_locales.py`, which proves each failure kind actually fires.
+
+**Catalog repair, then prune.** `msgmerge` against `en.po` pulled the 30
+missing RGB/lighting msgids into the nine non-English catalogs (untranslated →
+English fallback); `msgattrib --no-obsolete` dropped the dead macro/evdev
+strings; `msgfmt` rebuilt every `.mo`, fixing the stale `en.mo`. Then a second
+pass removed **29 msgids for features the app no longer has any source string
+for**. This is safe by construction: gettext only ever looks up a string
+*literal*, so a msgid whose literal no longer appears in the source cannot be
+produced at runtime — the catalogs are now 152 msgids in every language, 0
+obsolete, 0 fuzzy, and nothing reachable was lost.
+
+**Two i18n findings, recorded not fixed:**
+
+- **20 msgids are unreachable** — no string literal matching them exists anywhere
+  in `rivalcfg_gui/*.py`, so gettext can never be asked for them. They are not
+  from a removed feature, so the prune above deliberately left them.
+  `tools/find_unreachable_msgids.py` (committed, read-only, always exits 0)
+  produces the list; composition: the button-action labels (`Left Click`,
+  `Right Click`, `Middle Click`, `Forward`, `DPI Cycle`, `Scroll Up`,
+  `Scroll Down`, `Button 1`–`3`), the four RGB zone names
+  (`Z1 - Top Strip` … `Z4 - Logo`), two labels whose wording moved on (`Preset`,
+  `Timeout (10s)`), and four stale device/scan messages (`No device found.`,
+  `Mouse not connected`, `Click refresh to scan...`, `rival3.png not found.`).
+  Which are genuinely dead versus one spelling away from a live string wants the
+  `.pot` drift pass listed below. The scan decodes PO escapes, which a naive
+  substring test does not — `Delete profile "%s"?` looks unreachable until you
+  unescape `\"`; `tests/test_unreachable_msgids.py` pins that and the
+  source-wrapped-literal case, both of which over-report if broken.
+- **Button-action labels are never translated at all**, which is why the first
+  group above cannot resolve. `device_core.action_label()` produces the strings
+  that the app hands to GTK **unwrapped** — `rivalcfg_gui/app.py:2184, 2335, 2337,
+  2359, 2388, 2399` pass `action_label(...)` straight into `Gtk.Label(label=…)` /
+  `Gtk.Button(label=…)` with no `_()`. The catalogs' capitalised label spellings
+  (`Left Click`, …) therefore match nothing the app can ever ask for. This is a
+  pre-existing i18n gap, not a regression from this phase, and closing it means
+  deciding where the translation belongs — in `action_label`, at the call sites,
+  or by translating the ids the app already builds — so it is out of scope here.
+
+**CI / releases.** `.github/workflows/ci.yml` runs six jobs — `test` (3.10–3.14,
+no apt packages, since the suite is stdlib-only), `lint` (ruff pinned to an
+exact version), `locales`, `versions`, `packaging` (`pip install .` into a clean
+venv, then assert the console script, the importable package and that
+`assets/logo.png` + all ten `.mo` files are in the *installed* distribution via
+`importlib.metadata`), and a monthly `rivalcfg-master` job installing upstream
+from git. `tools/check_versions.py` reads each of the four version strings with a
+regex anchored on its own file's syntax, so a reformatted file is reported as
+unreadable rather than silently skipped. `RELEASING.md` is the checklist;
+there is deliberately **no tag-triggered release workflow**. Dependabot covers
+pip and github-actions, flagged honestly as a bonus rather than the mechanism
+(its coverage of a `setup.py`-only `install_requires` is partial — the scheduled
+job is the real safety net).
+
+**Still open (tracked, not blocking):**
+- A source-vs-catalog `.pot` drift check. An `xgettext` pass would find only a
+  minority of the msgids (most are composed at runtime from device and button
+  names) and would mark the rest obsolete, so it needs a considered design
+  before it is worth having.
+- The 20 unreachable msgids and the untranslated button-action labels above.
+- Debian `dpkg-buildpackage` and `flatpak-builder` are not available on the dev
+  machine; those two recipes are verified by inspection and by dry-running the
+  wrapper's `PYTHONPATH` + `python3 -m rivalcfg_gui` command line against the
+  tree the recipe would produce, not by an actual build.
 
 ---
 
@@ -394,33 +509,55 @@ Still open:
   table-driven tests (`test_device_core.py::test_matrix_*`) asserting the canonical
   order invariants. **Physical re-run of the matrix on hardware is still pending.**
 
-### Open hardware question
+### Dim-timer / "washed out colours" — **resolved**
+
 "Colours look pink / washed out" was investigated. Diagnosis: the 30 s **dim timer**
 dims idle LEDs, so pure `ff0000` is rendered reduced unless the dim timer is 0. The
-Power page now exposes it and the RGB page links to it. A device-side write of
-`--dim-timer 0` + pure primaries was issued for the user to confirm by eye; if it is
-still pink at `ff0000`, the wireless command path (readback/patch) needs investigation.
+Power page exposes it and the RGB page links to it. **The user confirmed the
+diagnosis and that it is no longer a problem** — setting the dim timer to 0 renders
+primaries correctly, so pure `ff0000` is no longer pink. There is nothing to
+investigate in the wireless readback/patch path; this is closed, not open.
 
 ---
 
 ## Test coverage (`tests/`)
 
+331 tests, GTK-, cairo-, numpy- and rivalcfg-free — they run on a bare runner.
+
 - `test_device_core.py`: caps derivation from a real Aerox 5 fixture, §1 order matrix,
   buttons arg (incl. trimmed-profile safety), full-plan order, `DeviceManager`
   library/CLI fallback, queue serialization / atomic failure / debounce / one-status,
   profile migration v1→v2.
+- `test_lighting_fx.py`: the lighting model (zones, effects, rainbow ordering).
 - `test_mouse3d.py`: station ordering, realistic bounds, wireframe structure,
   surface functions, button set/symmetry, projection fits in frame, hit-testing,
   view silhouettes.
 - `test_widgets.py`: hex/RGB/HSV helpers and clamping (via `colorutil`, GTK-free).
+- `test_locales.py`: wraps `tools/check_locales.py` and proves each failure kind
+  fires — missing/extra msgid, stale `.mo`, orphan `.mo`, dropped braces, dropped
+  or reordered `%s`. Compiles hand-rolled `.mo` files so it needs no gettext.
+- `test_versions.py`: wraps `tools/check_versions.py`; drives a reformatted file
+  (must be a parse error, not silent agreement), a Debian revision that is not a
+  version bump, and the `.SRCINFO` regeneration hint.
+- `test_unreachable_msgids.py`: wraps the read-only diagnostic and pins its two
+  false-positive traps — a source-wrapped literal and a PO-escaped quote — each
+  of which makes it report a msgid that is in fact live.
 
 ---
 
 ## How to run
 
 ```bash
-python -m pytest tests/      # 66 tests, no hardware
-python rivalcfg_gui.py       # or: rivalcfg-gui (console script)
+python -m pytest tests/      # 331 tests, no hardware
+python -m rivalcfg_gui       # or: rivalcfg-gui (installed console script)
+```
+
+Development checks, all of them the same ones CI runs:
+
+```bash
+ruff check .
+python tools/check_locales.py
+python tools/check_versions.py
 ```
 
 Regenerating the model data (numpy needed for both steps; the generated
@@ -428,7 +565,7 @@ module is pure data, so the app itself still has no build step):
 
 ```bash
 python3 tools/aerox5_model.py build     # -> build/aerox5_detailed.obj (+ .stl)
-python3 tools/extract_aerox5_mesh.py    # -> aerox5_mesh.py (byte-identical)
+python3 tools/extract_aerox5_mesh.py    # -> rivalcfg_gui/aerox5_mesh.py (byte-identical)
 ```
 
 Manual smoke checks performed during development (GTK Broadway backend):

@@ -37,7 +37,22 @@ A Linux desktop configuration tool for SteelSeries mice (via the `rivalcfg` CLI)
 | Turkish | `tr` |
 | Chinese (Simplified) | `zh_CN` |
 
-To contribute a new translation, copy `locales/en/LC_MESSAGES/rivalcfg_gui.po`, translate the strings, and submit a pull request.
+To contribute a new translation, copy `rivalcfg_gui/locales/en/LC_MESSAGES/rivalcfg_gui.po`, translate the strings, and submit a pull request.
+
+English is the reference catalog and every other language is checked against it. After editing any `.po`, rebuild its compiled `.mo` and run the checker:
+
+```bash
+msgfmt -o rivalcfg_gui/locales/<lang>/LC_MESSAGES/rivalcfg_gui.mo \
+       rivalcfg_gui/locales/<lang>/LC_MESSAGES/rivalcfg_gui.po
+python tools/check_locales.py
+```
+
+The checker fails if a catalog's message set has drifted from English (a missing
+or extra string), if a `.mo` disagrees with the `.po` it was built from, or if a
+translation drops a `{}` or `%s` the original had. It is the same script CI runs.
+Note that a catalog need not be fully translated — an empty `msgstr` is legal and
+falls back to English; the checker gates on *which* strings are present, not on
+how many are translated.
 
 ## Supported Devices
 
@@ -79,24 +94,54 @@ yay -Suy rivalcfg-gui
 yay -Rns rivalcfg-gui
 ```
 
+### From source (pip)
+
+```bash
+git clone https://github.com/MrGodzilla38/rivalcfg-gui
+cd rivalcfg-gui
+pip install .
+```
+
+This installs the `rivalcfg_gui` package (with its assets and translations) and
+a `rivalcfg-gui` console script. It can equally be run without installing, from
+the checkout:
+
+```bash
+python -m rivalcfg_gui
+```
+
 ## Requirements
 
 | Package | Purpose |
 |---------|---------|
-| Python 3 | Runtime |
+| Python 3.10+ | Runtime |
 | GTK3 | UI framework |
 | python-gobject (`gi`) | Python GTK3 bindings |
 | python-cairo (`cairo`) | Python Cairo bindings (custom colour picker + 3D wireframe) |
 | `rivalcfg` | SteelSeries CLI tool / device profiles |
+
+GTK3, `python-gobject` and `python-cairo` are **deliberately not** declared as
+pip dependencies: they are native system packages, and a wheel built here could
+not supply them. Install them through your distribution (for example
+`pacman -S gtk3 python-gobject python-cairo`) and let pip handle `rivalcfg`
+alone. `pip install .` is meant to work on a box that already has GTK.
 
 If no mouse is connected or `rivalcfg` is not found, the application will exit immediately with an error message.
 
 ### Development
 
 ```bash
-pip install pytest
-python -m pytest tests/
+pip install .            # or just run from the checkout with python -m rivalcfg_gui
+pip install pytest ruff
+python -m pytest tests/  # the suite is GTK-free and needs no hardware
+ruff check .             # rule set is in pyproject.toml (E9 + F only)
+python tools/check_locales.py   # catalogs agree with en, .mo files are current
+python tools/check_versions.py  # __version__ / PKGBUILD / .SRCINFO / changelog agree
 ```
+
+The tests never import GTK, cairo or `rivalcfg` — `device_core`, `lighting_fx`,
+`mouse3d` and `colorutil` are stdlib-only — so they run on a bare CI runner.
+Release steps live in [`RELEASING.md`](RELEASING.md).
 
 ## License
 GPL-3.0-or-later

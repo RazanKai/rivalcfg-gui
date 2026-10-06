@@ -384,6 +384,14 @@ code leaves no dead references (grep: `macro|pynput|evdev|Xlib|SIGUSR1`).
 
 ### Phase 6 — Packaging, tests, CI, i18n
 
+**Status: implemented** — see the Phase 6 entry in `WORKLOG.md` for what shipped
+and what was deliberately left open. Notes on the plan as written: the package
+migration in step 1 was taken (not deferred), releases are documented rather than
+automated (step 7 — `RELEASING.md` + a version-agreement check, no tag-triggered
+workflow), and step 4's distro *build* checks were not runnable on the dev machine
+(no `dpkg-buildpackage`/`flatpak-builder`), so those two recipes are verified by
+inspection.
+
 1. **setup.py**: `console_scripts` entry point
    (`rivalcfg-gui = rivalcfg_gui:main`), `package_data` for `assets/` +
    `locales/**/*.{mo}`, trim `install_requires` to `rivalcfg` (+ nothing
@@ -445,9 +453,15 @@ re-run on hardware.
 - Q3. Hyprland card scope after macro removal: keep `hyprland_mouse_sync` +
   `hyprland_follow_mouse` (proposed — they're WM conveniences, not clicker)?
   Or trim the whole card to reduce surface? Decision needed before Phase 5.
-- Q4. Dim-timer vs "colors don't match picker": verify with pure primaries
+- Q4. ~~Dim-timer vs "colors don't match picker": verify with pure primaries
   (per §1) once the Phase 4 dim-timer row exists; if confirmed, the RGB page
-  gets a permanent hint and the FAQ entry.
+  gets a permanent hint and the FAQ entry.~~ **Resolved.** Confirmed on hardware:
+  the 30 s dim timer was the cause, and pure `ff0000` renders correctly at
+  dim-timer 0. The in-page hint shipped ("Set 0 while comparing colors.") and the
+  Power page exposes the timer; the user reports it is no longer a problem. The
+  "FAQ entry" half was **not** done — the README has no FAQ section; the
+  behaviour is covered in the Features list instead. See the WORKLOG's dim-timer
+  note.
 - Q5. Device switching UX with multiple plugged SteelSeries devices:
   Phase 1's DeviceManager must *represent* several, but which one gets
   applied? Propose: device selector in the sidebar when >1 plugged, default
