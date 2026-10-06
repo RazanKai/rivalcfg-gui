@@ -1,0 +1,13 @@
+include README.md LICENSE PLAN.md WORKLOG.md RELEASING.md
+include pyproject.toml requirements.txt
+
+recursive-include rivalcfg_gui/assets *
+recursive-include rivalcfg_gui/locales *.po *.mo
+
+recursive-include tests *.py
+recursive-include tools *.py
+
+# Downstream packagers build from the sdist, so the distro recipes ship with it.
+recursive-include dist *
+
+global-exclude __pycache__/* *.py[cod]

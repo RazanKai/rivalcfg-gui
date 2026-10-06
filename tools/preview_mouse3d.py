@@ -23,7 +23,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import cairo  # noqa: E402
 
-import mouse3d  # noqa: E402
+from rivalcfg_gui import mouse3d  # noqa: E402
 
 #: name -> (yaw_deg, pitch_deg)
 VIEWS = {

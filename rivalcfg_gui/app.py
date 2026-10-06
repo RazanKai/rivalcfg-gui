@@ -47,9 +47,9 @@ except ImportError:
     print(_("python-gobject is not installed. Install: pacman -S python-gobject"))
     sys.exit(1)
 
-import device_core
-import lighting_fx
-import widgets
+from . import device_core
+from . import lighting_fx
+from . import widgets
 
 SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 FLATPAK_ID = os.environ.get("FLATPAK_ID")
@@ -1499,7 +1499,7 @@ def create_rgb_page():
     # region selects that zone in the editor, exactly as the old blocks did.
     import math as _math
 
-    import mouse3d
+    from . import mouse3d
 
     #: The zones drawn as regions of the body.  A device with a fourth
     #: --logo-color zone keeps it selectable from its swatch, but it sits
@@ -2103,7 +2103,7 @@ def create_buttons_page():
     """Button Mapping page (3D wireframe of the mouse + assignment popover)."""
     import math as _math
 
-    import mouse3d
+    from . import mouse3d
 
     caps = get_device_caps()
     keyboard = caps.button_keyboard
@@ -4100,5 +4100,6 @@ def main():
     Gtk.main()
 
 
-if __name__ == "__main__":
-    main()
+# No ``if __name__ == "__main__"`` guard: this module uses package-relative
+# imports, so running ``python rivalcfg_gui/app.py`` cannot work.  Use
+# ``python -m rivalcfg_gui``, or the installed ``rivalcfg-gui`` console script.

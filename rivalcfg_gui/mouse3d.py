@@ -30,7 +30,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-import aerox5_mesh as _mesh
+from . import aerox5_mesh as _mesh
 
 
 # ---------------------------------------------------------------------------

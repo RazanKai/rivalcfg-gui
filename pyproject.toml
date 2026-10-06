@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=61", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The package lives in the tree, so pytest is always run from the repo root;
+# this puts that root on sys.path and removes the old per-file sys.path hack.
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py310"
+
+# Deliberately conservative. The codebase has never been linted and carries a lot
+# of explanatory comment weight; the gate is "real errors only" (syntax problems,
+# undefined names, unused imports/variables) rather than a style sweep. Widening
+# this is a separate decision, and ruff-format is not used here at all.
+[tool.ruff.lint]
+select = ["E9", "F"]

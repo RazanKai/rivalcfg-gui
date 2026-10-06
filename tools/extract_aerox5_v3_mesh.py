@@ -38,7 +38,7 @@ import numpy as np
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OBJ_DEFAULT = os.path.join(REPO_ROOT, "aerox5_3d_files", "aerox5_v3.obj")
 OBJ_PATH = sys.argv[1] if len(sys.argv) > 1 else OBJ_DEFAULT
-OUT_PATH = os.path.join(REPO_ROOT, "aerox5_mesh.py")
+OUT_PATH = os.path.join(REPO_ROOT, "rivalcfg_gui", "aerox5_mesh.py")
 
 RING_COUNT = 26          # cross-section slices along the length
 RING_STEPS = 48          # uniform arc-length resample per ring

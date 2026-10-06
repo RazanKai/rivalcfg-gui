@@ -1,16 +1,12 @@
 """Tests for device_core: capabilities, plans and the command queue."""
 
 import copy
-import os
-import sys
 import threading
 import time
 
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import device_core as dc  # noqa: E402
+from rivalcfg_gui import device_core as dc
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,7 @@ from gi.repository import Gdk, Gtk  # noqa: E402
 
 import cairo  # noqa: E402
 
-from colorutil import (  # noqa: E402,F401
+from .colorutil import (  # noqa: E402,F401
     clamp,
     hex_to_hsv,
     hex_to_rgb,

@@ -1,12 +1,8 @@
 """Tests for the 3D wireframe model (geometry, projection, hit testing)."""
 
 import math
-import os
-import sys
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import mouse3d  # noqa: E402
+from rivalcfg_gui import mouse3d
 
 
 def test_stations_are_ordered_front_to_back():

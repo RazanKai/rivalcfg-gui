@@ -1,11 +1,6 @@
 """Tests for the colour helpers and picker in widgets.py."""
 
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import colorutil as widgets  # noqa: E402
+from rivalcfg_gui import colorutil as widgets
 
 
 def test_normalize_hex_variants():

@@ -65,7 +65,7 @@ from scipy import ndimage
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import mouse3d  # noqa: E402
+from rivalcfg_gui import mouse3d  # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -734,7 +734,7 @@ def main():
         print("\n--- _LEAD_CUT_MM ---\n%s" % lead)
         return
 
-    path = os.path.join(ROOT, "mouse3d.py")
+    path = os.path.join(ROOT, "rivalcfg_gui", "mouse3d.py")
     with open(path) as fh:
         source = fh.read()
     for name, block in (("_SEAM_FIX", seam), ("_TAIL_CUT_MM", tail),

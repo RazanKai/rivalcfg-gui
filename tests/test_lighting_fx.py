@@ -5,14 +5,9 @@ which is what lets them be checked here at all.  What the numbers *look* like
 on the mouse is the in-process preview runs' job (see WORKLOG).
 """
 
-import os
-import sys
-
 import pytest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-import lighting_fx as fx  # noqa: E402
+from rivalcfg_gui import lighting_fx as fx
 
 PALETTE = ("ff0000", "00ff00", "0000ff")
 

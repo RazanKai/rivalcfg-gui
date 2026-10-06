@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import math
 
-from colorutil import hex_to_rgb, rgb_to_hex
+from .colorutil import hex_to_rgb, rgb_to_hex
 
 #: Effects this module can animate.  The GUI offers these as lighting modes
 #: alongside the two the firmware does itself (Steady, Rainbow).
