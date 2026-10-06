@@ -22,7 +22,6 @@ Requires numpy (build-time only; the generated module is pure data).
 
 from __future__ import annotations
 
-import math
 import os
 import sys
 from collections import defaultdict
@@ -544,7 +543,7 @@ def main():
         for row in side_grid:
             out.write(f"    {[round(float(v) / length, 4) for v in row]},\n")
         out.write("]\n")
-        out.write(f"\n#: normalisation constants (mm -> normalised)\n")
+        out.write("\n#: normalisation constants (mm -> normalised)\n")
         out.write(f"LENGTH_MM = {round(length, 3)}\n")
         out.write(f"Y_MIN_MM = {round(ymin, 3)}\n")
         out.write(f"GRID_X_MM = {[round(float(v), 2) for v in gx]}\n")

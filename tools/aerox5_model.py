@@ -312,7 +312,6 @@ def _hole_stagger(row, col):
 
 def _in_hole(y, th):
     """True when (y, |th|) falls inside a honeycomb diamond."""
-    import bisect as _bisect
     ath = abs(th)
     if ath > HOLE_FLANK:
         return False

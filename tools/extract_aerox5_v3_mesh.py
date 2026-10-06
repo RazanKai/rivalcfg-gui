@@ -648,7 +648,6 @@ def main():
         return pts
 
     epairs, tri_pairs, free = build_edge_map(tris_all, len(verts))
-    normals = tri_normals(verts, tris_all)
     print("edges %d manifold %d free %d" % (len(epairs), len(epairs), len(free)))
 
     def group_tris(name):
@@ -657,7 +656,6 @@ def main():
 
     def group_free_edges(name, min_len=4):
         m = gid_all == gid_of[name]
-        owner_tris = set(np.where(m)[0])
         # free edges whose single triangle belongs to this group
         e = np.concatenate([tris_all[m][:, [0, 1]], tris_all[m][:, [1, 2]],
                             tris_all[m][:, [2, 0]]])

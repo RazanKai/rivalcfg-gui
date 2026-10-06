@@ -1,0 +1,144 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # The upstream rivalcfg job below is the only one that runs unattended:
+    # a monthly sweep is enough to catch a break before a release, and a
+    # minute past the hour keeps it off the queue's busy marks.
+    - cron: "17 6 1 * *"
+
+# A second push to the same branch makes the first run's answer worthless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.10 is the floor python_requires claims, so it is the leg that keeps
+        # that claim honest; 3.14 is the newest the package is expected to run
+        # on.  A failure on one version only is exactly what this catches.
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      # No GTK, cairo, numpy or rivalcfg: device_core, lighting_fx, mouse3d,
+      # aerox5_mesh and colorutil are stdlib-only, which is what lets the suite
+      # run on a bare runner.  Installing the package is not needed either --
+      # pyproject's `pythonpath = ["."]` puts the tree on sys.path.
+      - run: pip install pytest
+      - run: python -m pytest tests/ -q
+
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # Pinned: ruff adds rules between releases, and an unpinned linter turns
+      # an unrelated bump into a red build.  The rule set itself (E9 + F) lives
+      # in pyproject.toml so it is the same locally.
+      - run: pip install "ruff==0.16.10"
+      - run: ruff check .
+
+  locales:
+    name: locales
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      # The checker shells out to msgfmt --check-format when it is available,
+      # and says so when it is not, so gettext is what makes this the full
+      # check rather than the reduced one.
+      - run: sudo apt-get update && sudo apt-get install -y gettext
+      - run: python tools/check_locales.py
+
+  versions:
+    name: versions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python tools/check_versions.py
+
+  packaging:
+    name: packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      # A venv with no system site-packages, so the install is proved to stand
+      # on its own rather than borrowing the runner's copy of anything.
+      - name: Install into a clean venv
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install --upgrade pip
+          /tmp/venv/bin/pip install .
+      # The acceptance criterion, checked rather than assumed: a console
+      # script, an importable package, and the data files actually present in
+      # the installed distribution.  Assets and locale catalogs are the part a
+      # `py_modules`-era setup.py silently dropped.
+      - name: Assert the installed distribution
+        run: |
+          /tmp/venv/bin/python - <<'PY'
+          import importlib.metadata as metadata
+          import pathlib
+
+          files = metadata.files("rivalcfg-gui") or []
+          names = {str(f) for f in files}
+
+          wanted = ["rivalcfg_gui/assets/logo.png"]
+          wanted += [f"rivalcfg_gui/locales/{lang}/LC_MESSAGES/rivalcfg_gui.mo"
+                     for lang in ("de", "en", "es", "fr", "it", "pl", "pt_BR", "ru", "tr", "zh_CN")]
+          missing = [w for w in wanted if w not in names]
+          assert not missing, f"not installed: {missing}"
+
+          import rivalcfg_gui
+          from rivalcfg_gui import device_core, lighting_fx, mouse3d, colorutil
+          version = metadata.version("rivalcfg-gui")
+          assert rivalcfg_gui.__version__ == version, (rivalcfg_gui.__version__, version)
+          print(f"installed {len(names)} files, version {version}")
+
+          script = pathlib.Path("/tmp/venv/bin/rivalcfg-gui")
+          assert script.exists() and script.stat().st_mode & 0o111, "console script missing"
+          PY
+
+  # Upstream rivalcfg is a runtime dependency and a moving target: this job is
+  # the only thing that notices when its help output or CLI changes underneath
+  # the parsing in device_core.  Honest about its limit -- the suite itself does
+  # not import rivalcfg (device_core takes it injected), so what this proves is
+  # that upstream still installs and that the suite still passes against it.
+  rivalcfg-master:
+    name: upstream rivalcfg (master)
+    if: github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pytest
+      - name: Install rivalcfg from git
+        run: pip install "rivalcfg @ git+https://github.com/flozz/rivalcfg.git"
+      - run: python -c "import rivalcfg; print(rivalcfg.__version__)"
+      - run: python -m pytest tests/ -q

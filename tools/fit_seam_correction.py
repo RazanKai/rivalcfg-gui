@@ -422,7 +422,6 @@ def seated_jacobian(view, point, lift=0.006, step=0.01):
 
 def cyclic_smooth(field, radius):
     """Box-smooth an ``(n, 2)`` array around a closed loop."""
-    n = len(field)
     span = 2 * radius + 1
     tiled = np.concatenate([field[-radius:], field, field[:radius]])
     out = np.empty_like(field)

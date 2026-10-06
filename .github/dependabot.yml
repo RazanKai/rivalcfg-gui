@@ -1,0 +1,36 @@
+# Kept deliberately small, and honest about what it does not cover.
+#
+# `rivalcfg` is the one runtime dependency, and it is declared in setup.py's
+# `install_requires`.  Dependabot's pip ecosystem reads requirements files and
+# pyproject metadata; its handling of a setup.py-only declaration is partial,
+# so it may never open a PR for it.  The scheduled `rivalcfg-master` job in
+# ci.yml is the actual safety net for an upstream break -- this is a bonus, not
+# the mechanism.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      # Off the hour, and not at a round time, so the week's PRs do not all
+      # land on the same minute as everyone else's.
+      time: "06:23"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    labels:
+      - dependencies
+
+  # The workflows pin actions by major tag and ruff by exact version; without
+  # this, those pins only ever get updated by hand.
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:23"
+    commit-message:
+      prefix: "chore(ci)"
+    labels:
+      - dependencies
