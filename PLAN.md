@@ -387,10 +387,21 @@ code leaves no dead references (grep: `macro|pynput|evdev|Xlib|SIGUSR1`).
 **Status: implemented** — see the Phase 6 entry in `WORKLOG.md` for what shipped
 and what was deliberately left open. Notes on the plan as written: the package
 migration in step 1 was taken (not deferred), releases are documented rather than
-automated (step 7 — `RELEASING.md` + a version-agreement check, no tag-triggered
-workflow), and step 4's distro *build* checks were not runnable on the dev machine
-(no `dpkg-buildpackage`/`flatpak-builder`), so those two recipes are verified by
+automated (step 7 — a version-agreement check, no tag-triggered workflow), and
+step 4's distro *build* checks were not runnable on the dev machine (no
+`dpkg-buildpackage`/`flatpak-builder`), so those two recipes were verified by
 inspection.
+
+**Superseded in part — distro packaging dropped.** Since this repository is a
+fork and not the upstream maintainer, the `dist/` recipes (AUR, Debian, Flatpak),
+`RELEASING.md` and the version-agreement checker (`tools/check_versions.py`,
+`tests/test_versions.py`) and the CI `versions` job were **removed**. The checker
+existed only to keep four copies of the version in sync; with three of those
+files gone it had nothing left to compare. Steps 2, 4, 6 and 7 below describe the
+package as it was built at the time and no longer apply. What remains — the pip
+install path, the `packaging` CI job that asserts assets and catalogs land in the
+installed distribution, `tools/check_locales.py` — is unaffected. See the
+2026-10-06 entry in `WORKLOG.md`.
 
 1. **setup.py**: `console_scripts` entry point
    (`rivalcfg-gui = rivalcfg_gui:main`), `package_data` for `assets/` +
@@ -465,4 +476,68 @@ re-run on hardware.
 - Q5. Device switching UX with multiple plugged SteelSeries devices:
   Phase 1's DeviceManager must *represent* several, but which one gets
   applied? Propose: device selector in the sidebar when >1 plugged, default
-  first; needs sign-off.
+  first. **Decided — deferred (future feature).** The proposal is agreed as
+  written and is *not* to be built now; a single plugged device is the
+  supported case. Recorded here so the next session does not re-open it as an
+  unknown, and so the sidebar can be shaped to leave room for it.
+- Q6. Generalising the 3D mesh pipeline to other mice: see the future-feature
+  entry below. **Decided — deferred.** Not scheduled, and not started.
+
+---
+
+## Future features (agreed, not scheduled)
+
+Two items are agreed in shape and deliberately **not** being built. Neither is
+an open question — do not re-derive them, and do not start them without being
+asked.
+
+### 1. Device picker for several plugged mice
+
+As Q5 above: a sidebar device selector, shown only when more than one
+SteelSeries device is plugged, defaulting to the first. The sidebar should be
+shaped to leave room for it. One plugged device is the supported case today.
+
+### 2. AI-assisted mesh pipeline for further mice
+
+Today only the Aerox 5 has geometry, and getting there was bespoke work: a
+hand-written solid model (`aerox5_3d_files/model.py`), an extractor tuned to its
+output (`tools/extract_aerox5_v3_mesh.py`), and hand-fitted correction tables
+(`tools/fit_seam_correction.py` and the `_SEAM_FIX` / `_TAIL_CUT_MM` /
+`_LEAD_CUT_MM` tables in `mouse3d.py`). `mouse3d.py` imports the Aerox 5 mesh by
+name. None of the *inputs* are in the repository — `aerox5_3d_files/` is
+gitignored, so the chain cannot be re-run from a fresh clone; only its output
+ships.
+
+The agreed shape is to fix the **interfaces** rather than write another
+per-mouse model:
+
+1. **A per-mouse description file** — dimensions, thumb side, button inventory,
+   light-zone count and stations, wheel position. Replaces the constants now
+   scattered through `mouse3d.py`.
+2. **Silhouette** — the outline data, traced off reference views (what
+   `profiles_smooth.npz` is) with a vision model proposing a first draft.
+3. **Silhouette → solid OBJ** — one generic loft/honeycomb/seat builder. Its
+   output uses a **fixed part vocabulary** (`shell`, `honeycomb`, caps by button
+   number, `wheel`, skates); that vocabulary is the contract, and it is what
+   lets a *scanned* mesh enter the same slot unchanged if scanning ever becomes
+   available.
+4. **OBJ → runtime data** — one extractor, device-driven, writing
+   `rivalcfg_gui/meshes/<mouse>.py` (pure data, as today).
+5. **Markup corrections** — generalise `fit_seam_correction.py` to take
+   (screenshot, view, which edge) and write into the per-mouse module. This part
+   cannot be automated away: a new mouse needs its own markup pass.
+6. **Review loop** — parameterise `tools/preview_mouse3d.py` by mouse, and feed
+   markups back into step 5.
+7. **Device-parameterised `mouse3d.py`** — take (mesh data, description) instead
+   of importing one mouse.
+
+Where AI genuinely helps: reading dimensioned drawings and photos into a
+first-draft description file, proposing loft control points, and flagging where a
+render disagrees with a reference photo. Where it does not: producing a clean,
+correctly-named, watertight OBJ in one shot.
+
+**Order and acceptance.** Do the interfaces first (description file, vocabulary,
+device-parameterised renderer) — all testable without owning a second mouse — then
+port the Aerox 5 onto them, where the acceptance test already exists: the
+generated mesh data must come out **byte-identical** to what is committed. Add a
+second mouse (Q1's Rival 3) only after that passes.

@@ -2078,3 +2078,195 @@ ripple and is left in deliberately -- it is 0.01 px on screen -- but it is the
 one number in the table that is not a description of anything the user drew.
 And the git state is unchanged: ~30 files uncommitted on ``overhaul`` plus the
 stale ``.git/AUTO_MERGE``; nothing was committed or rolled back this window.
+
+---
+
+## 2026-10-06 — the outstanding work is committed, and the git-state caveat closes
+
+The 2026-10-05 entries above -- the click-panel rollback, the drawn seam, the
+bracket on button 4, the estimated seam, the keycap corner -- each end with the
+same line: "~30 files uncommitted on ``overhaul`` plus the stale
+``.git/AUTO_MERGE``; nothing was committed or rolled back this window."  Each
+was true when written, and none of them describes the tree any more.  The work
+was committed, and the packaging, locale and CI phases landed on top of it.
+
+``overhaul`` now sits at ``bf4d111`` ("docs: record Phase 6, and close the
+dim-timer question"), the working tree is clean, the branch is level with
+``origin/overhaul``, and ``.git/AUTO_MERGE`` is gone.  The suite was re-run at
+this commit: **331 tests pass** on a bare runner.  Nothing is waiting to be
+committed, so no earlier "still open" note about the git state should be read as
+current -- this entry supersedes all of them.
+
+The *shape* questions those same entries leave open are untouched by any of
+this: the lever's hand-chosen ``-19.0`` station still wants its sweep re-running
+if the seam is ever revised outward, and the ``-8.8e-05`` knot at vertex 681 is
+still deliberate.
+
+### Decisions taken this session
+
+- **Multi-device picker — agreed, deferred.** `PLAN.md` Q5 is now marked
+  *decided, deferred (future feature)*: a sidebar device selector when more
+  than one SteelSeries device is plugged, first device as the default, is the
+  agreed shape, but only one plugged device is supported for now. Nothing was
+  built.
+- **Button-action labels — options put to the user, no choice yet.** The gap
+  is deeper than "the call site does not call ``_()``": the catalogs carry an
+  older *vocabulary* (``Left Click``, ``Forward``, ``DPI Cycle``, ``Scroll
+  Up``) while ``device_core.ACTION_LABELS`` builds different spellings
+  (``Left click``, ``Button 4``, ``DPI cycle``, ``Scroll up``), and none of
+  the latter exist as msgids. So the twenty "unreachable" msgids listed in the
+  Phase 6 entry and this gap are one problem, not two. See the note below.
+- **Mesh pipeline — to be generalised into a documented, AI-assisted
+  workflow** so a second mouse does not need another hand-written
+  ``model.py``. Scoped, not built; the design is in the session notes and
+  wants sign-off before any of it lands.
+
+### Why the button labels are untranslated (measured, not assumed)
+
+Grepping the *exact* strings the code produces against ``en.po``:
+
+| label the code builds | in code | as a msgid |
+|---|---|---|
+| ``Left click`` | yes | **no** |
+| ``Disabled`` | yes | **no** |
+| ``Default`` | yes | **no** |
+| ``Play / Pause`` | yes | **no** |
+| ``Mute`` | yes | **no** |
+| ``Volume up`` | yes | **no** |
+| ``Button 4`` | yes | yes (from an unrelated button *name*) |
+
+So wrapping the six call sites in ``_()`` would translate nothing: gettext
+looks the string up verbatim and every one of them misses. The fix has to
+settle the vocabulary first and rewrite the catalogs to it, which is why it
+was left as a decision rather than a patch.
+
+---
+
+## 2026-10-06 — the button labels are translated, and the distro packaging is gone
+
+Two decisions taken this window, both from the options put to the user at the
+end of the previous entry.  Nothing is committed: the working tree holds every
+change below.
+
+### Button labels — the catalogs' vocabulary wins, and a check now pins it
+
+The previous entry ended by saying the fix "has to settle the vocabulary first
+and rewrite the catalogs to it".  That is what was done, and the direction was
+chosen by counting rather than by taste: the Title Case set the catalogs already
+carry is translated in all nine languages (``Left Click`` → ``Linksklick``,
+``Clic gauche``, ``Левый клик``, ``左键单击``), while the spellings
+``device_core`` was building exist nowhere.  Adopting the catalogs' wording
+therefore *reuses* twenty lines of existing translation instead of asking for
+new ones.
+
+What changed:
+
+- ``rivalcfg_gui/device_core.py`` — ``ACTION_LABELS`` and
+  ``MULTIMEDIA_ACTIONS`` re-spelled to the catalog vocabulary (``Left click`` →
+  ``Left Click``, ``DPI cycle`` → ``DPI Cycle``, ``Scroll up`` → ``Scroll Up``,
+  ``Volume up`` → ``Volume Up``, ``Previous``/``Next`` → ``Previous Track``/
+  ``Next Track``).  A new ``is_named_action()`` tells a fixed mouse action from
+  a keyboard key, which is what lets the UI translate the first and leave the
+  second alone.
+- ``rivalcfg_gui/app.py`` — a new ``_action_text()`` wraps
+  ``device_core.action_label()`` and looks the result up in gettext; all seven
+  call sites (the assignment chips, the popover's factory-action and
+  ``Default (…)`` rows, the multimedia buttons, both picker rows and the
+  disable row) go through it.  The lookup happens in the window layer, not in
+  ``device_core``: that module is deliberately gettext-free so it stays
+  importable without catalogs, and translating at display time is what keeps a
+  live language switch working.
+- **A key name is still never translated.**  ``_action_text()`` consults
+  ``is_named_action()`` first, so ``A`` or ``LeftCtrl+C`` is shown exactly as
+  built.  Translating one would rename the key on the user's keyboard.
+- Ten catalogs — eleven msgids appended to each (``Button 7`` through
+  ``Button 9``, ``Disabled``, ``Default``, ``Play / Pause``, ``Previous
+  Track``, ``Next Track``, ``Volume Up``, ``Volume Down``, ``Mute``).  ``en``
+  gets ``msgstr`` = ``msgid``; the other nine are left empty, which is the
+  catalog's established way of saying "not translated yet" and falls back to
+  English at runtime (they join the 31 empties ``de.po`` already had).  All ten
+  ``.mo`` files were rebuilt with ``msgfmt``.  Every catalog is now at **163
+  msgids**, and ``tools/check_locales.py`` reports all ten in agreement.
+
+Measured effect: ``tools/find_unreachable_msgids.py`` now lists **14 of 152**
+catalog strings with no matching literal in the source, down from 20 — the six
+Click/Scroll/DPI labels went live.  The remaining fourteen are the zone names
+(``Z1 - Top Strip`` … ``Z4 - Logo``), ``Button 1``–``Button 3``, ``Forward``,
+``Preset``, ``Timeout (10s)`` and the four status/error strings; pruning them is
+a separate question and was not asked for.
+
+**One thing differs from the option as approved.**  The recommendation was "a
+literal table in the app window layer"; what landed is the same contract
+reached one step shorter — the strings already exist as literals in
+``device_core.ACTION_LABELS``, where the reachability diagnostic can see them,
+so a second copy in ``app.py`` would have been a table whose every entry was
+already covered, leaving ``ACTION_LABELS`` vestigial and the table dead.  Title
+Case vocabulary, keys untranslated, the two pinned together by a check: all
+three as approved.  Only the mechanism moved.
+
+**The pinning check**, promised with that recommendation, is in:
+
+- ``tools/check_locales.py`` reads the label list **out of ``device_core``**
+  (importing it, not copying it — a copy would be one more thing to keep in
+  step) and compares it with the reference catalog's msgids.  A label with no
+  msgid is a new fatal kind, ``missing-label``.  It is on by default, so the
+  command CI runs is the command that catches it; ``check()`` takes
+  ``with_labels=False`` for the tests that build two-string throwaway catalogs,
+  which would otherwise report every real label as missing.
+- Proven end to end rather than asserted: renaming ``Left Click`` to ``Left
+  Clicked`` in ``device_core`` makes ``python tools/check_locales.py`` print
+  ``! missing-label: 1 action label(s) the UI can build have no msgid: 'Left
+  Clicked'`` and exit 1.  Restored afterwards; the tree is green.
+- Three tests added to ``tests/test_locales.py``: the shipped catalogs carry
+  every label, the kind fires on a catalog missing one (and names it), and the
+  check stays off for the throwaway trees.  **325 tests pass**, up from 322.
+
+Not done, and not asked for: translating those eleven strings into the nine
+languages.  They fall back to English, which the checker allows by design.
+
+``ruff`` is not installed on this machine, so the lint gate was not run
+locally; CI pins ``ruff==0.16.10`` and the rule set is E9 + F.
+
+### Distro packaging removed
+
+The request was to drop "the CI pipeline that publishes to package managers".
+There is no such pipeline and there never was: ``ci.yml`` sets
+``permissions: contents: read``, ``RELEASING.md`` says in as many words that
+there is no release workflow and nothing is published from here, and the one
+job with a packaging-sounding name installs the project into a throwaway venv
+and asserts the files are there.  Nothing publishes anywhere.  Put to the user,
+the intent turned out to be the recipes themselves and the release checklist, so
+those went:
+
+- ``dist/`` — thirteen tracked files: ``aur/`` (PKGBUILD, .SRCINFO, .install),
+  ``debian/`` (changelog, control, copyright, rules, source/format) and
+  ``flatpak/`` (desktop, metainfo, manifest, requirements, run.sh).
+- ``RELEASING.md``.
+- **The cascade.**  ``tools/check_versions.py`` existed for one purpose: to
+  keep the version number identical across four files, one of which was the
+  Debian changelog and another the Flatpak manifest.  With three of the four
+  gone it had nothing left to compare, so it went, taking ``tests/test_versions.py``
+  (nine tests) and the CI ``versions`` job with it.
+- ``.gitignore`` and ``MANIFEST.in`` — the Flatpak build directory and the
+  Debian staging globs, ``recursive-include dist *``, and the ``RELEASING.md``
+  reference.
+- ``README.md`` — the "Arch Linux (AUR)" installation section and the two dev
+  commands that named the removed files.
+- ``PLAN.md`` — Phase 6's packaging step marked *superseded in part*, with the
+  reason; steps 2, 4, 6 and 7 of it no longer apply.
+
+``pip install .`` and ``python -m rivalcfg_gui`` are untouched and are now the
+only supported ways to install it.  Whether to package it for a distribution is
+the distributor's job, not this repository's.
+
+### Also settled this window
+
+- **The 3D mesh pipeline is a future feature, not work in progress.**  ``PLAN.md``
+  gains a "Future features" section with two agreed-but-unscheduled items: the
+  multi-device picker (Q5, now *decided, deferred*) and the generalised mesh
+  pipeline (Q6) — a per-mouse description file, a silhouette, silhouette→OBJ
+  with a fixed part vocabulary so a scanned mesh enters the same slot, a
+  device-driven extractor, and parameterised seam-correction and preview tools.
+  The acceptance test named for it is a byte-identical generated mesh, so the
+  generalisation cannot quietly move the geometry.  None of it is started, and
+  ``aerox5_3d_files/`` stays gitignored.

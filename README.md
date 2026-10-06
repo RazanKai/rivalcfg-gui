@@ -78,22 +78,6 @@ is not offered. Configure such behaviour with your compositor or a dedicated too
 
 ## Installation
 
-### Arch Linux (AUR)
-
-```bash
-yay -S rivalcfg-gui
-```
-
-**Upgrade:**
-```bash
-yay -Suy rivalcfg-gui
-```
-
-**Uninstall:**
-```bash
-yay -Rns rivalcfg-gui
-```
-
 ### From source (pip)
 
 ```bash
@@ -136,12 +120,10 @@ pip install pytest ruff
 python -m pytest tests/  # the suite is GTK-free and needs no hardware
 ruff check .             # rule set is in pyproject.toml (E9 + F only)
 python tools/check_locales.py   # catalogs agree with en, .mo files are current
-python tools/check_versions.py  # __version__ / PKGBUILD / .SRCINFO / changelog agree
 ```
 
 The tests never import GTK, cairo or `rivalcfg` — `device_core`, `lighting_fx`,
 `mouse3d` and `colorutil` are stdlib-only — so they run on a bare CI runner.
-Release steps live in [`RELEASING.md`](RELEASING.md).
 
 ## License
 GPL-3.0-or-later

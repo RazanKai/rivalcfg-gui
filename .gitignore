@@ -13,14 +13,10 @@ rivalcfg-gui.desktop
 .pytest_cache/
 .ruff_cache/
 
-# Python build artefacts. `python -m build` defaults to ./dist, which also holds
-# the tracked distro recipes (dist/debian, dist/flatpak, dist/aur) -- prefer
+# Python build artefacts. `python -m build` defaults to ./dist; prefer
 # `python -m build --outdir build/dist`, and ignore the default just in case.
 dist/*.whl
 dist/*.tar.gz
-
-# Flatpak build directory
-build-dir/
 
 # Mesh build artefacts (regenerate with tools/aerox5_model.py)
 build/
@@ -29,6 +25,3 @@ build/
 # Input to tools/extract_aerox5_v3_mesh.py, which regenerates aerox5_mesh.py;
 # the generated module is what the repo ships.
 aerox5_3d_files/
-
-# Standalone rivalcfg downloaded during Debian build
-rivalcfg-cli_v*/
