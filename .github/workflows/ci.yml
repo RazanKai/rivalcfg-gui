@@ -34,11 +34,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      # No GTK, cairo, numpy or rivalcfg: device_core, lighting_fx, mouse3d,
-      # aerox5_mesh and colorutil are stdlib-only, which is what lets the suite
-      # run on a bare runner.  Installing the package is not needed either --
-      # pyproject's `pythonpath = ["."]` puts the tree on sys.path.
-      - run: pip install pytest
+      # The modules under test -- device_core, lighting_fx, mouse3d, aerox5_mesh,
+      # colorutil -- are stdlib-only, so no GTK, cairo or numpy is needed here.
+      # rivalcfg *is* installed: fifteen tests compare against its own key table
+      # (keyboard_layout -> combo_codes), and without the library they fail with
+      # "rivalcfg keyboard layout is not available" rather than skipping.  That
+      # is deliberate -- it is how this job was red for a while unnoticed.  The
+      # package itself still needs no install: pyproject's `pythonpath = ["."]`
+      # puts the tree on sys.path.
+      - run: pip install pytest rivalcfg
       - run: python -m pytest tests/ -q
 
   lint:

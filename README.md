@@ -122,8 +122,12 @@ ruff check .             # rule set is in pyproject.toml (E9 + F only)
 python tools/check_locales.py   # catalogs agree with en, .mo files are current
 ```
 
-The tests never import GTK, cairo or `rivalcfg` — `device_core`, `lighting_fx`,
-`mouse3d` and `colorutil` are stdlib-only — so they run on a bare CI runner.
+The modules under test — `device_core`, `lighting_fx`, `mouse3d` and
+`colorutil` — are stdlib-only, so nothing here needs GTK, cairo or a mouse.
+Fifteen tests do compare against `rivalcfg`'s own key table, though, so the
+suite wants the library installed (`pip install .` above brings it in). Without
+it those tests fail rather than skip: a skip would hide the gap, which is how
+CI ran red for a while without anyone noticing.
 
 ## License
 GPL-3.0-or-later
