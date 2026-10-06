@@ -487,7 +487,7 @@ re-run on hardware.
 
 ## Future features (agreed, not scheduled)
 
-Two items are agreed in shape and deliberately **not** being built. Neither is
+Three items are agreed in shape and deliberately **not** being built. None is
 an open question — do not re-derive them, and do not start them without being
 asked.
 
@@ -541,3 +541,36 @@ device-parameterised renderer) — all testable without owning a second mouse �
 port the Aerox 5 onto them, where the acceptance test already exists: the
 generated mesh data must come out **byte-identical** to what is committed. Add a
 second mouse (Q1's Rival 3) only after that passes.
+### 3. Tray icon, and minimizing to it
+
+**What is claimed today vs. what happens.** The settings page offers *Startup
+Minimize — "Launch minimized to system tray"*, and the README repeats the claim.
+There is no tray icon in the codebase at all: both call sites
+(`app.py:3591`, `app.py:3683`) do `window.iconify()`, which minimizes to the
+taskbar. So the setting works, but the "system tray" half of it is missing, and
+the label tells the user something untrue. Until this lands, that label should
+read "taskbar" — or the feature should be built.
+
+**The shape.** A tray icon with a small menu: Show/Hide, the pages reachable
+directly, Apply, Quit. Closing the window hides it to the tray instead of
+ending the process, and *Startup Minimize* finally does what its label says —
+start hidden, with the tray icon as the only way back in. A first-run hint is
+needed, because a window that vanishes with no tray host running looks like a
+crash.
+
+**The platform constraint, which is the whole difficulty.** `Gtk.StatusIcon` is
+X11-only and is not merely deprecated on Wayland but absent; this fork's target
+is Hyprland, so it cannot be used. The portable answer is a StatusNotifierItem
+published over D-Bus (`libayatana-appindicator` via GIR), which requires a host
+to display it — a bar with a tray module. That must be treated as optional:
+probe for it, and when there is no host, fall back to taskbar minimize and keep
+the setting's label honest about which one is in force.
+
+**Acceptance.** With a tray host running: the icon appears, closing hides the
+window, the process stays alive and still talks to the mouse, and Quit ends it.
+With no host: the app starts, logs why, and minimizes to the taskbar — it must
+not fail to start, and must not leave a window that cannot be reopened.
+
+Not to be confused with the auto-clicker and its setuid helper removed in Phase
+5: this is a window-management affordance, it injects no input, and it needs no
+privileges.
