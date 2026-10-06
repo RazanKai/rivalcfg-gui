@@ -2270,3 +2270,32 @@ the distributor's job, not this repository's.
   The acceptance test named for it is a byte-identical generated mesh, so the
   generalisation cannot quietly move the geometry.  None of it is started, and
   ``aerox5_3d_files/`` stays gitignored.
+
+### The CI test job was red, and had been since it was written
+
+The first push of the above (`8e6fb68`) came back with the five `test` legs
+failed and `lint`, `locales` and `packaging` green.  Chasing it rather than
+assuming it was the new work: the run *before* it, at `bf4d111`, was already
+red at the same step, so nothing in this window caused it.
+
+The cause is a mismatch between what the job installs and what the suite needs.
+The job installed `pytest` alone, on the written assumption that "the tests
+never import GTK, cairo or ``rivalcfg``".  That is true of the modules under
+test and false of the suite: fifteen tests compare the app's combo encoding
+against ``rivalcfg``'s own key table (``keyboard_layout`` →
+``combo_codes``), and with the library absent those raise
+``rivalcfg keyboard layout is not available``.
+
+Verified by reproducing it, not by reading it: blocking the ``rivalcfg`` import
+gives **15 failed, 276 passed, 1 skipped** locally — the same fifteen CI names.
+
+Fixed in `bf111c2` by installing `rivalcfg` in that job, and the README line
+that carried the wrong assumption is corrected.  All seven jobs are now green,
+which also settles the ``ruff`` question left open above: the lint gate passes
+on the new `tools/check_locales.py` code, so the rule set did not object to it.
+
+Those tests are deliberately left *failing* rather than skipping when the
+library is missing.  ``tests/test_device_core.py`` skips in two places already,
+and a skip here was the tempting answer — but a skip is precisely what kept
+this red for an unknown number of pushes without anyone reading it.  A missing
+declared runtime dependency is a broken environment, not an untestable one.
