@@ -631,3 +631,47 @@ msgstr ""
 #: rivalcfg_gui/app.py
 msgid "The palette replaces these colours."
 msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Button 7"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Button 8"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Button 9"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Disabled"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Default"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Play / Pause"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Previous Track"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Next Track"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Volume Up"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Volume Down"
+msgstr ""
+
+#: rivalcfg_gui/device_core.py
+msgid "Mute"
+msgstr ""

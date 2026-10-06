@@ -631,3 +631,47 @@ msgstr "The LEDs are off."
 #: rivalcfg_gui/app.py
 msgid "The palette replaces these colours."
 msgstr "The palette replaces these colours."
+
+#: rivalcfg_gui/device_core.py
+msgid "Button 7"
+msgstr "Button 7"
+
+#: rivalcfg_gui/device_core.py
+msgid "Button 8"
+msgstr "Button 8"
+
+#: rivalcfg_gui/device_core.py
+msgid "Button 9"
+msgstr "Button 9"
+
+#: rivalcfg_gui/device_core.py
+msgid "Disabled"
+msgstr "Disabled"
+
+#: rivalcfg_gui/device_core.py
+msgid "Default"
+msgstr "Default"
+
+#: rivalcfg_gui/device_core.py
+msgid "Play / Pause"
+msgstr "Play / Pause"
+
+#: rivalcfg_gui/device_core.py
+msgid "Previous Track"
+msgstr "Previous Track"
+
+#: rivalcfg_gui/device_core.py
+msgid "Next Track"
+msgstr "Next Track"
+
+#: rivalcfg_gui/device_core.py
+msgid "Volume Up"
+msgstr "Volume Up"
+
+#: rivalcfg_gui/device_core.py
+msgid "Volume Down"
+msgstr "Volume Down"
+
+#: rivalcfg_gui/device_core.py
+msgid "Mute"
+msgstr "Mute"

@@ -55,6 +55,20 @@ SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 FLATPAK_ID = os.environ.get("FLATPAK_ID")
 IN_FLATPAK = FLATPAK_ID is not None
 
+
+def _action_text(value):
+    """The label to show for a button assignment, translated where it can be.
+
+    Only the fixed mouse actions have a label worth translating (see
+    ``device_core.is_named_action``); a key name or combination is shown as
+    built.  The translation happens *here*, at display time, rather than in
+    ``device_core``: that module is deliberately gettext-free so it stays
+    importable without the catalogs, and looking the string up on every call
+    keeps a live language switch working.
+    """
+    label = device_core.action_label(value)
+    return _(label) if device_core.is_named_action(value) else label
+
 # Prefer bundled rivalcfg binary, fall back to pip-installed or system PATH
 def _find_rivalcfg():
     bundled = os.path.join(SCRIPT_DIR, "rivalcfg")
@@ -2181,7 +2195,7 @@ def create_buttons_page():
 
     def _chip_text(key, label):
         assigned = app_state["button_mapping"].get(key, "")
-        return "%s: %s" % (label, device_core.action_label(assigned))
+        return "%s: %s" % (label, _action_text(assigned))
 
     def on_draw(widget, cr):
         w = widget.get_allocated_width()
@@ -2332,14 +2346,14 @@ def create_buttons_page():
         default = app_state["button_defaults"].get(button_key, "disabled")
         if default and default != "disabled":
             _add_action_button(
-                _("Default (%s)") % device_core.action_label(default), default, button_key
+                _("Default (%s)") % _action_text(default), default, button_key
             )
-        _add_action_button(device_core.action_label("disabled"), "disabled", button_key)
+        _add_action_button(_action_text("disabled"), "disabled", button_key)
 
         if mm_items:
             popover_box.pack_start(_section_label(_("MULTIMEDIA")), False, False, 0)
-            for value, label in mm_items:
-                _add_action_button(label, value, button_key)
+            for value, _label in mm_items:
+                _add_action_button(_action_text(value), value, button_key)
 
         too_many = None
         if key_items:
@@ -2356,7 +2370,7 @@ def create_buttons_page():
             key_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
             key_picker_btn = Gtk.Button()
             picker_inner = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-            picker_label = Gtk.Label(label=device_core.action_label(picker_choice[0]))
+            picker_label = Gtk.Label(label=_action_text(picker_choice[0]))
             picker_label.set_halign(Gtk.Align.START)
             picker_arrow = Gtk.Label(label="▾")
             picker_arrow.get_style_context().add_class("profile-arrow")
@@ -2385,7 +2399,7 @@ def create_buttons_page():
 
             def _choose_key(name):
                 picker_choice[0] = name
-                picker_label.set_text(device_core.action_label(name))
+                picker_label.set_text(_action_text(name))
 
             for group_id, names in key_groups:
                 heading = Gtk.Label(label=_(group_id).upper())
@@ -2396,7 +2410,7 @@ def create_buttons_page():
                 heading.set_margin_start(8)
                 picker_list.pack_start(heading, False, False, 0)
                 for name in names:
-                    row_btn = Gtk.Button(label=device_core.action_label(name))
+                    row_btn = Gtk.Button(label=_action_text(name))
                     row_btn.set_relief(Gtk.ReliefStyle.NONE)
                     row_btn.set_halign(Gtk.Align.FILL)
                     row_btn.get_style_context().add_class("profile-menu-select")

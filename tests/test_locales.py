@@ -108,8 +108,14 @@ def _tree(tmp_path, catalogs):
 
 
 def _problems(root):
-    """Every problem the checker finds, without msgfmt's own parse."""
-    return cl.check(root, with_msgfmt=False)
+    """Every problem the checker finds, without msgfmt's own parse.
+
+    ``with_labels=False``: the catalogs built here are strings invented for a
+    test, so the labels the app builds are all "missing" from them by
+    construction.  The shipped tree's own tests call ``check`` directly and do
+    keep that check on.
+    """
+    return cl.check(root, with_msgfmt=False, with_labels=False)
 
 
 def _found(root):
@@ -137,6 +143,18 @@ def test_shipped_catalogs_have_no_obsolete_entries():
 
 def test_the_shipped_tree_has_a_reference_catalog():
     assert cl.REFERENCE in cl.languages(cl.DEFAULT_LOCALE_DIR)
+
+
+def test_the_shipped_catalogs_carry_every_action_label():
+    """The half of the contract a test of the app could not see.
+
+    The labels are read out of ``device_core``, so renaming one in the code and
+    not in ``en.po`` fails here rather than shipping a button that is English
+    in every language.  This is the drift the 2026-10 fixing pass closed.
+    """
+    _, entries = cl.parse_po(cl.catalog_path(cl.DEFAULT_LOCALE_DIR, cl.REFERENCE))
+    present = {entry.msgid for entry in entries if not entry.obsolete}
+    assert sorted(cl.action_labels() - present) == []
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +266,44 @@ def test_obsolete_entries_warn_without_failing(tmp_path):
     problems = _problems(root)
     assert [(p.lang, p.kind) for p in problems] == [("en", "obsolete")]
     assert problems[0].kind not in cl.FATAL_KINDS
+
+
+def test_an_action_label_the_catalogs_lack_is_reported(tmp_path):
+    """Prove the kind fires: a check that cannot fail is not a check.
+
+    A catalog carrying every label is in order; the same catalog minus one is
+    not, and the label that was dropped is the one named.
+    """
+    labels = sorted(cl.action_labels())
+    assert labels, "device_core offers no labels -- the check would be vacuous"
+
+    def catalog(names):
+        return {name: name for name in names}
+
+    root = _tree(tmp_path / "complete", {
+        "en": (catalog(labels), None),
+        "de": (catalog(labels), None),
+    })
+    assert cl.check(root, with_msgfmt=False, with_labels=True) == []
+
+    root = _tree(tmp_path / "minus-one", {
+        "en": (catalog(labels[:-1]), None),
+        "de": (catalog(labels[:-1]), None),
+    })
+    problems = cl.check(root, with_msgfmt=False, with_labels=True)
+    assert [(p.lang, p.kind) for p in problems] == [("en", "missing-label")]
+    assert problems[0].kind in cl.FATAL_KINDS
+    assert labels[-1] in problems[0].detail
+
+
+def test_the_label_check_is_off_for_a_throwaway_tree(tmp_path):
+    # Otherwise every test above would report the app's labels as missing from
+    # catalogs that were never meant to carry them.
+    root = _tree(tmp_path, {
+        "en": ({"Hello": "Hello"}, None),
+        "de": ({"Hello": "Hallo"}, None),
+    })
+    assert _problems(root) == []
 
 
 def test_a_tree_without_the_reference_catalog_is_an_error(tmp_path):

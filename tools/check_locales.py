@@ -15,9 +15,12 @@ Two failures that have to be caught by eye otherwise:
   rebuilds it.  An ``en.mo`` built from an older ``.po`` still translates the
   strings that existed then -- so the app runs, in a language the catalog no
   longer describes.  Comparing the two sets is the only way to see it.
+* **Labels.**  The button labels are built in the code and looked up verbatim,
+  so a label spelled one way in ``device_core`` and another in the catalogs is
+  simply never translated -- in all ten languages at once, silently.
 
-Neither is visible at runtime, which is why this is a check and not a test of
-the app.
+None of the three is visible at runtime, which is why this is a check and not a
+test of the app.
 
 There is deliberately no ``xgettext`` extraction here.  Most of ``en.po``'s
 msgids are built at runtime -- device names and button labels come out of
@@ -56,7 +59,8 @@ Problem = namedtuple("Problem", "lang kind detail")
 
 #: Fatal: the app would misbehave or the catalog would be silently incomplete.
 FATAL_KINDS = frozenset(
-    {"missing-msgid", "extra-msgid", "stale-mo", "orphan-mo", "format", "syntax"}
+    {"missing-msgid", "extra-msgid", "stale-mo", "orphan-mo", "format", "syntax",
+     "missing-label"}
 )
 
 
@@ -252,11 +256,35 @@ def languages(locale_dir):
     )
 
 
-def check(locale_dir=DEFAULT_LOCALE_DIR, with_msgfmt=True):
+def action_labels():
+    """Every button-action label the window layer can display, read from the code.
+
+    Taken from ``device_core`` rather than listed here: a copy of the list in
+    this file would be one more thing to keep in step, which is the drift being
+    checked for in the first place.  ``device_core`` is standard-library-only,
+    so this works on a bare runner.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from rivalcfg_gui import device_core
+
+    labels = set(device_core.ACTION_LABELS.values())
+    labels.update(label for _value, label in device_core.MULTIMEDIA_ACTIONS)
+    return labels
+
+
+def check(locale_dir=DEFAULT_LOCALE_DIR, with_msgfmt=True, with_labels=True):
     """Return every problem found.  An empty list means the catalogs are in order.
 
     Only the kinds in :data:`FATAL_KINDS` should fail a build; the rest are
     reported so they do not go unnoticed.
+
+    ``with_labels`` compares the labels the button UI can build, as read from
+    ``device_core``, against the reference catalog.  A caller handing in a
+    throwaway tree -- the checker's own tests -- passes ``False``: two strings
+    invented on the spot are not the app's vocabulary, and would report every
+    real label as missing.
     """
     problems = []
     langs = languages(locale_dir)
@@ -331,6 +359,18 @@ def check(locale_dir=DEFAULT_LOCALE_DIR, with_msgfmt=True):
                 continue
             for detail in format_problems(msgid, entry.msgstr):
                 problems.append(Problem(lang, "format", f"{msgid!r}: {detail}"))
+
+    if with_labels:
+        # A label with no msgid is not a broken app: gettext hands the string
+        # back untranslated, so the button reads "Left Click" in every language
+        # and nothing else notices.  This is the check that was silent while
+        # the code built "Left click" and all ten catalogs carried "Left Click".
+        absent = sorted(action_labels() - set(reference))
+        if absent:
+            problems.append(Problem(REFERENCE, "missing-label",
+                                    f"{len(absent)} action label(s) the UI can build "
+                                    f"have no msgid: "
+                                    + ", ".join(repr(a) for a in absent[:4])))
 
     if with_msgfmt:
         problems.extend(_msgfmt_problems(locale_dir, langs))

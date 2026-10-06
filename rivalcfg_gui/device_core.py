@@ -30,32 +30,40 @@ from typing import Callable, Iterable, Optional, Union
 # ---------------------------------------------------------------------------
 
 #: Human readable labels for button assignment values (UI chips/popovers).
+#:
+#: The spellings are the *catalogs'* own.  gettext looks a string up verbatim,
+#: so a label the catalogs already translate has to be spelled exactly as they
+#: spell it -- and they carry translations for nine languages under these
+#: spellings.  Retyping one here silently un-translates that label, which is
+#: what had happened to every entry below before this was aligned;
+#: ``tests/test_device_core.py`` pins the two together so it cannot drift again.
 ACTION_LABELS = {
-    "button1": "Left click",
-    "button2": "Right click",
-    "button3": "Middle click",
+    "button1": "Left Click",
+    "button2": "Right Click",
+    "button3": "Middle Click",
     "button4": "Button 4",
     "button5": "Button 5",
     "button6": "Button 6",
     "button7": "Button 7",
     "button8": "Button 8",
     "button9": "Button 9",
-    "dpi": "DPI cycle",
-    "scrollup": "Scroll up",
-    "scrolldown": "Scroll down",
+    "dpi": "DPI Cycle",
+    "scrollup": "Scroll Up",
+    "scrolldown": "Scroll Down",
     "disabled": "Disabled",
     "disable": "Disabled",
     "default": "Default",
 }
 
 #: Multimedia actions, in the order shown in the popover. Values are the
-#: canonical names understood by rivalcfg's buttons handler.
+#: canonical names understood by rivalcfg's buttons handler. Labels are spelled
+#: to match ACTION_LABELS above (title case, same as the catalogs).
 MULTIMEDIA_ACTIONS = [
     ("PlayPause", "Play / Pause"),
-    ("Previous", "Previous track"),
-    ("Next", "Next track"),
-    ("VolumeUp", "Volume up"),
-    ("VolumeDown", "Volume down"),
+    ("Previous", "Previous Track"),
+    ("Next", "Next Track"),
+    ("VolumeUp", "Volume Up"),
+    ("VolumeDown", "Volume Down"),
     ("Mute", "Mute"),
 ]
 
@@ -311,6 +319,20 @@ def action_label(value: str) -> str:
         if value.lower() == canonical.lower():
             return label
     return value
+
+
+def is_named_action(value: str) -> bool:
+    """True when *value* is a fixed mouse action rather than a keyboard key.
+
+    The UI translates the labels of named actions and shows everything else as
+    built.  A key name (``"A"``) or a combination (``"LeftCtrl+C"``) is not a
+    phrase: translating one would rename the key on the user's keyboard, so
+    those never reach gettext.
+    """
+    if value in ACTION_LABELS:
+        return True
+    lowered = value.lower()
+    return any(lowered == canonical.lower() for canonical, _label in MULTIMEDIA_ACTIONS)
 
 
 # ---------------------------------------------------------------------------
