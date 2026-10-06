@@ -1284,7 +1284,7 @@ def zone_colour(colors, y):
 #: same colour, the way the device does.  A wide sweep (most of a turn) paints
 #: three visibly different colours on one mouse, which is a different effect;
 #: that is what this was, and it was wrong.  The width also sets how fast the
-#: roll *looks*: see ``_RAINBOW_PERIOD_MS`` in rivalcfg_gui.py.
+#: roll *looks*: see ``_RAINBOW_PERIOD_MS`` in app.py.
 _RAINBOW_TURNS = 0.2
 
 

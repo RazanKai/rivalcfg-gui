@@ -32,21 +32,19 @@ modules:
   - name: rivalcfg-gui
     buildsystem: simple
     build-commands:
-      - install -Dm755 rivalcfg_gui.py /app/lib/rivalcfg-gui/rivalcfg_gui.py
-      - install -Dm644 device_core.py /app/lib/rivalcfg-gui/device_core.py
-      - install -Dm644 mouse3d.py /app/lib/rivalcfg-gui/mouse3d.py
-      - install -Dm644 widgets.py /app/lib/rivalcfg-gui/widgets.py
-      - install -Dm644 colorutil.py /app/lib/rivalcfg-gui/colorutil.py
+      # The application is one package directory now, with assets/ and locales/
+      # inside it, so it is copied wholesale.  The per-module list this replaces
+      # was missing lighting_fx.py and aerox5_mesh.py -- both of which the app
+      # imports -- so the installed GUI could not start, and the locales had to
+      # be duplicated into /app/share/locale by hand.
+      - install -d /app/lib/rivalcfg-gui
+      - cp -r rivalcfg_gui /app/lib/rivalcfg-gui/rivalcfg_gui
+      - find /app/lib/rivalcfg-gui -name '__pycache__' -type d -prune -exec rm -rf {} +
+      - find /app/lib/rivalcfg-gui -name '*.pyc' -delete
       - install -Dm755 dist/flatpak/run.sh /app/bin/run.sh
-      - |
-        for lang_dir in locales/*/LC_MESSAGES; do
-          lang=$(basename "$(dirname "$lang_dir")")
-          install -Dm644 "$lang_dir/rivalcfg_gui.mo" "/app/share/locale/$lang/LC_MESSAGES/rivalcfg_gui.mo"
-        done
       - install -Dm644 dist/flatpak/io.github.MrGodzilla38.rivalcfg_gui.desktop /app/share/applications/io.github.MrGodzilla38.rivalcfg_gui.desktop
       - install -Dm644 dist/flatpak/io.github.MrGodzilla38.rivalcfg_gui.metainfo.xml /app/share/metainfo/io.github.MrGodzilla38.rivalcfg_gui.metainfo.xml
-      - install -Dm644 assets/logo.png /app/share/icons/hicolor/256x256/apps/io.github.MrGodzilla38.rivalcfg_gui.png
-      - cp -r assets /app/lib/rivalcfg-gui/assets
+      - install -Dm644 rivalcfg_gui/assets/logo.png /app/share/icons/hicolor/256x256/apps/io.github.MrGodzilla38.rivalcfg_gui.png
     sources:
       - type: dir
         path: ../..

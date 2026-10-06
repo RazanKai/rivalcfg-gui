@@ -1,3 +1,20 @@
+rivalcfg-gui (1.6.0-1) unstable; urgency=medium
+
+  * Release 1.6.0.
+  * Package the application as a real Python package (rivalcfg_gui/), with
+    assets/ and locales/ inside it.  The hand-written per-module install list
+    was missing lighting_fx.py and aerox5_mesh.py, both imported by the app, so
+    the installed GUI could not start at all.
+  * Launch via `python3 -m rivalcfg_gui` from a /usr/bin/rivalcfg-gui wrapper.
+    The modules use package-relative imports now and cannot be run as a bare
+    script path, which is what the old symlink to rivalcfg_gui.py relied on.
+  * Drop debian/install.  dh_install resolves its source paths against the
+    source tree root (falling back to debian/tmp); the rules file stages the
+    package directory directly into debian/rivalcfg-gui, so those paths could
+    never match and dh_install would fail on them.
+
+ -- MrGodzilla38 <oyunustasigodzilla@gmail.com>  Tue, 06 Oct 2026 12:00:00 +0000
+
 rivalcfg-gui (1.4.0-1) unstable; urgency=medium
 
   * Release 1.4.0.

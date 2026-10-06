@@ -14,7 +14,7 @@ effects testable without a display or a mouse attached -- the same reason
 
 Only the maths lives here.  The tick and the HID writes live elsewhere: the GUI
 already knows how to drive a timer that stops when the page is off screen (see
-``_RAINBOW_TICK_MS`` in ``rivalcfg_gui.py``), and device_core owns device I/O.
+``_RAINBOW_TICK_MS`` in ``app.py``), and device_core owns device I/O.
 """
 
 from __future__ import annotations
